@@ -1,0 +1,2 @@
+"""Telegram PDF security bot."""
+

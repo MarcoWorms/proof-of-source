@@ -64,6 +64,38 @@ function bumpButton(button) {
   setTimeout(() => button.classList.remove('bump'), 140);
 }
 
+function wireButtonPointerFX(button) {
+  if (!button || button.dataset.fxBound === 'true') {
+    return;
+  }
+
+  button.dataset.fxBound = 'true';
+
+  button.addEventListener('pointermove', (event) => {
+    const rect = button.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * 100;
+    const y = ((event.clientY - rect.top) / rect.height) * 100;
+    button.style.setProperty('--mx', `${Math.max(0, Math.min(100, x))}%`);
+    button.style.setProperty('--my', `${Math.max(0, Math.min(100, y))}%`);
+  });
+
+  const reset = () => {
+    button.style.setProperty('--mx', '50%');
+    button.style.setProperty('--my', '50%');
+  };
+
+  button.addEventListener('pointerleave', reset);
+  button.addEventListener('blur', reset);
+  button.addEventListener('click', () => bumpButton(button));
+}
+
+function refreshButtonFX() {
+  const buttons = document.querySelectorAll('button');
+  for (const button of buttons) {
+    wireButtonPointerFX(button);
+  }
+}
+
 function runImpact(panel) {
   if (!panel) {
     return;
@@ -159,6 +191,14 @@ function updateFileMeta() {
   elements.fileMeta.textContent = `${state.contractName}: ${selectedCount}/${total} files selected.`;
 }
 
+function refreshRowSelectionStyles() {
+  const rows = elements.filesList.querySelectorAll('.file-row');
+  for (const row of rows) {
+    const checkbox = row.querySelector('input[type="checkbox"]');
+    row.classList.toggle('is-selected', Boolean(checkbox?.checked));
+  }
+}
+
 function syncSelectionsFromDom(options = {}) {
   const boxes = elements.filesList.querySelectorAll('input[type="checkbox"]');
   for (const box of boxes) {
@@ -169,6 +209,7 @@ function syncSelectionsFromDom(options = {}) {
   }
 
   updateFileMeta();
+  refreshRowSelectionStyles();
 
   if (options.persist !== false) {
     persistState();
@@ -213,6 +254,7 @@ function renderFileList() {
   }
 
   updateFileMeta();
+  refreshRowSelectionStyles();
 }
 
 function gatherSelectedFiles() {
@@ -336,6 +378,7 @@ function renderVerifyResults(fileResults) {
   for (const result of fileResults) {
     const card = document.createElement('article');
     card.className = 'result-card';
+    card.classList.add(result.status === 'match' ? 'result-match' : 'result-mismatch');
 
     const head = document.createElement('div');
     head.className = 'result-head';
@@ -545,6 +588,7 @@ function checkAllFiles(checked) {
   }
 
   updateFileMeta();
+  refreshRowSelectionStyles();
   persistState();
 }
 
@@ -563,6 +607,7 @@ function uncheckOpenZeppelinFiles() {
   }
 
   updateFileMeta();
+  refreshRowSelectionStyles();
   persistState();
 }
 
@@ -585,6 +630,7 @@ function uncheckLibDirectoryFiles() {
   }
 
   updateFileMeta();
+  refreshRowSelectionStyles();
   persistState();
 }
 
@@ -671,6 +717,7 @@ function bindEvents() {
   elements.uncheckLibBtn.addEventListener('click', uncheckLibDirectoryFiles);
   elements.uncheckLibsBtn.addEventListener('click', uncheckOpenZeppelinFiles);
   elements.filesList.addEventListener('change', () => syncSelectionsFromDom());
+  refreshButtonFX();
 }
 
 function initialize() {
