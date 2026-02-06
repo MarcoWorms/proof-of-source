@@ -419,6 +419,7 @@ input:focus {
   align-items: center;
   justify-content: space-between;
   gap: 0.85rem;
+  margin-bottom: 16px;
 }
 
 .panel-head h2 {
