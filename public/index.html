@@ -3,49 +3,55 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Etherscan vs GitHub Differ</title>
+    <title>ProofOfSource</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;700;800;900&family=Noto+Sans+Mono:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main class="app-shell">
       <header class="hero">
-        <p class="eyebrow">On-chain source verifier</p>
-        <h1>Etherscan vs GitHub Differ</h1>
+        <p class="eyebrow">Proof, not promises.</p>
+        <h1>ProofOfSource</h1>
         <p class="subtitle">
-          Compare verified contract files from Etherscan with a GitHub repository and commit.
+          Prove deployed contracts are the same as the open source.
         </p>
       </header>
 
-      <section class="panel">
-        <h2>1. Load Etherscan Source Files</h2>
+      <section id="step-1-panel" class="panel step-panel">
+        <h2>1. Pull Verified Source</h2>
         <div class="form-grid">
           <label>
-            Contract Address
+            Deployed Contract Address
             <input id="contract-address" type="text" placeholder="0x..." autocomplete="off" />
           </label>
           <label>
             Chain ID
             <input id="chain-id" type="text" placeholder="1" value="1" autocomplete="off" />
           </label>
-          <label>
+          <label id="etherscan-key-group">
             Etherscan API Key
             <input
               id="etherscan-api-key"
               type="password"
-              placeholder="Optional if ETHERSCAN_API_KEY is set on server"
+              placeholder="Only needed if server key is not configured"
               autocomplete="off"
             />
           </label>
         </div>
-        <button id="load-files-btn" class="btn primary">Load Contracts</button>
+        <button id="load-files-btn" class="btn primary">Load Source</button>
         <p id="load-status" class="status"></p>
       </section>
 
-      <section id="files-panel" class="panel" hidden>
+      <section id="files-panel" class="panel step-panel" hidden>
         <div class="panel-head">
-          <h2>2. Choose Files to Verify</h2>
+          <h2>2. Select Files to Compare</h2>
           <div class="actions">
-            <button id="check-all-btn" class="btn ghost" type="button">Check All</button>
+            <button id="check-all-btn" class="btn ghost" type="button">Select All</button>
             <button id="uncheck-all-btn" class="btn ghost" type="button">Uncheck All</button>
             <button id="uncheck-lib-btn" class="btn ghost" type="button">Uncheck /lib</button>
             <button id="uncheck-libs-btn" class="btn ghost" type="button">Uncheck OpenZeppelin</button>
@@ -55,8 +61,8 @@
         <div id="files-list" class="files-list"></div>
       </section>
 
-      <section id="verify-panel" class="panel" hidden>
-        <h2>3. Compare Against GitHub Repo</h2>
+      <section id="verify-panel" class="panel step-panel" hidden>
+        <h2>3. Verify Against GitHub</h2>
         <div class="form-grid">
           <label>
             GitHub Repository URL
@@ -72,10 +78,14 @@
             />
           </label>
         </div>
-        <button id="verify-btn" class="btn primary" type="button">Verify Selected Files</button>
+        <button id="verify-btn" class="btn primary" type="button">Run Proof</button>
         <p id="verify-status" class="status"></p>
         <div id="verify-results" class="verify-results"></div>
       </section>
+
+      <footer class="brand-credit">
+        <a href="https://yearn.fi" target="_blank" rel="noopener noreferrer">powered by yearn.fi</a>
+      </footer>
     </main>
 
     <script src="app.js"></script>

@@ -1,23 +1,23 @@
-# Etherscan vs GitHub Differ
+# ProofOfSource
 
-This project helps users verify that smart contract source files verified on Etherscan match the exact files in a GitHub repository at a specific commit.
+Prove deployed contracts are the same as the open source.
+
+ProofOfSource compares verified contract files from Etherscan against a GitHub repository (optionally pinned to a commit).
 
 ## What It Does
 
-1. Accepts an Ethereum contract address.
-2. Fetches verified source code from Etherscan API V2.
-3. Displays all discovered contract/source files as checkboxes.
-4. Unchecks OpenZeppelin files by default.
-5. Accepts a GitHub repository URL and optional commit hash.
-6. If no commit hash is provided, it uses the latest commit on the repo default branch.
-7. Compares selected Etherscan files to GitHub files and reports:
-   - Green success if all selected files match.
-   - Red failure with per-file diffs where content differs.
+1. Accepts a deployed contract address.
+2. Pulls verified source files from Etherscan API V2.
+3. Shows file checkboxes with library shortcuts (`Uncheck OpenZeppelin`, `Uncheck /lib`, etc.).
+4. Accepts a GitHub repository URL and optional commit hash.
+5. Uses latest `main` commit when no hash is provided (falls back to default branch if needed).
+6. Compares selected Etherscan files to repository files.
+7. Shows pass/fail status and inline diffs for mismatches.
 
 ## Requirements
 
 - Node.js 18+
-- Etherscan API key (either in UI input or `ETHERSCAN_API_KEY` env var)
+- Etherscan API key (in UI or `ETHERSCAN_API_KEY` on server)
 
 ## Install
 
@@ -31,16 +31,16 @@ npm install
 npm start
 ```
 
-Then open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000).
 
-## Optional Environment Variables
+## Environment Variables
 
-- `ETHERSCAN_API_KEY`: default Etherscan API key
-- `ETHERSCAN_API_BASE`: override Etherscan API base URL (defaults to `https://api.etherscan.io/v2/api`)
-- `GITHUB_TOKEN`: GitHub token to increase API rate limits
+- `ETHERSCAN_API_KEY`: default Etherscan API key (if set, frontend hides API key field)
+- `ETHERSCAN_API_BASE`: override Etherscan API base URL (default: `https://api.etherscan.io/v2/api`)
+- `GITHUB_TOKEN`: optional GitHub token for higher API rate limits
 
 ## Notes
 
-- The comparison normalizes line endings (`CRLF` vs `LF`) before checking equality.
-- Matching strategy prefers exact path first, then falls back to files with the same basename.
-- Etherscan calls include `chainid` (default `1` for Ethereum mainnet).
+- Comparison normalizes line endings (`CRLF` and `LF`) before equality checks.
+- Matching prefers exact path first, then basename fallback.
+- Etherscan calls include `chainid` (default `1`, Ethereum mainnet).

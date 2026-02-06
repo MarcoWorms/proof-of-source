@@ -1,16 +1,19 @@
-const STORAGE_KEY = 'etherscanGithubDiffer.state.v1';
+const STORAGE_KEY = 'proofOfSource.state.v2';
 
 const state = {
   contractName: '',
   files: [],
   verifyResults: [],
   loadStatus: { type: 'info', message: '' },
-  verifyStatus: { type: 'info', message: '' }
+  verifyStatus: { type: 'info', message: '' },
+  hasServerEtherscanKey: false
 };
 
 const elements = {
+  step1Panel: document.getElementById('step-1-panel'),
   contractAddress: document.getElementById('contract-address'),
   chainId: document.getElementById('chain-id'),
+  etherscanKeyGroup: document.getElementById('etherscan-key-group'),
   etherscanApiKey: document.getElementById('etherscan-api-key'),
   loadFilesBtn: document.getElementById('load-files-btn'),
   loadStatus: document.getElementById('load-status'),
@@ -32,6 +35,56 @@ const elements = {
 function setStatus(target, type, message) {
   target.className = `status ${type}`;
   target.textContent = message;
+}
+
+function setLoadStatus(type, message, options = {}) {
+  state.loadStatus = { type, message };
+  setStatus(elements.loadStatus, type, message);
+  if (options.persist !== false) {
+    persistState();
+  }
+}
+
+function setVerifyStatus(type, message, options = {}) {
+  state.verifyStatus = { type, message };
+  setStatus(elements.verifyStatus, type, message);
+  if (options.persist !== false) {
+    persistState();
+  }
+}
+
+function bumpButton(button) {
+  if (!button) {
+    return;
+  }
+
+  button.classList.remove('bump');
+  void button.offsetWidth;
+  button.classList.add('bump');
+  setTimeout(() => button.classList.remove('bump'), 140);
+}
+
+function runImpact(panel) {
+  if (!panel) {
+    return;
+  }
+
+  panel.classList.remove('impact-next');
+  void panel.offsetWidth;
+  panel.classList.add('impact-next');
+  setTimeout(() => panel.classList.remove('impact-next'), 280);
+}
+
+function revealPanel(panel) {
+  if (!panel) {
+    return;
+  }
+
+  if (panel.hidden) {
+    panel.hidden = false;
+  }
+
+  runImpact(panel);
 }
 
 function persistState() {
@@ -98,22 +151,6 @@ function normalizeStoredFiles(candidate) {
         selected
       };
     });
-}
-
-function setLoadStatus(type, message, options = {}) {
-  state.loadStatus = { type, message };
-  setStatus(elements.loadStatus, type, message);
-  if (options.persist !== false) {
-    persistState();
-  }
-}
-
-function setVerifyStatus(type, message, options = {}) {
-  state.verifyStatus = { type, message };
-  setStatus(elements.verifyStatus, type, message);
-  if (options.persist !== false) {
-    persistState();
-  }
 }
 
 function updateFileMeta() {
@@ -336,7 +373,7 @@ function renderVerifyResults(fileResults) {
 
       const summary = document.createElement('summary');
       summary.className = 'diff-summary';
-      summary.textContent = 'View diff';
+      summary.textContent = 'Inspect diff';
 
       details.appendChild(summary);
       details.appendChild(renderUnifiedDiff(result.diff));
@@ -344,6 +381,34 @@ function renderVerifyResults(fileResults) {
     }
 
     elements.verifyResults.appendChild(card);
+  }
+}
+
+function applyRuntimeConfig() {
+  elements.etherscanKeyGroup.hidden = state.hasServerEtherscanKey;
+  if (state.hasServerEtherscanKey) {
+    elements.etherscanApiKey.value = '';
+  }
+  persistState();
+}
+
+async function fetchRuntimeConfig() {
+  try {
+    const response = await fetch('/api/config');
+    if (!response.ok) {
+      throw new Error('Config request failed');
+    }
+
+    const body = await response.json();
+    state.hasServerEtherscanKey = Boolean(body?.hasServerEtherscanKey);
+  } catch {
+    state.hasServerEtherscanKey = false;
+  }
+
+  applyRuntimeConfig();
+
+  if (state.hasServerEtherscanKey && !state.loadStatus.message) {
+    setLoadStatus('info', 'Server Etherscan key detected. Personal key is optional.');
   }
 }
 
@@ -389,12 +454,15 @@ function restoreState() {
 }
 
 async function loadFiles() {
+  bumpButton(elements.loadFilesBtn);
+  runImpact(elements.step1Panel);
+
   const address = elements.contractAddress.value.trim();
   const chainId = elements.chainId.value.trim() || '1';
   const apiKey = elements.etherscanApiKey.value.trim();
 
   if (!address) {
-    setLoadStatus('error', 'Enter a contract address.');
+    setLoadStatus('error', 'Enter a contract address to start the proof.');
     return;
   }
 
@@ -403,8 +471,13 @@ async function loadFiles() {
     return;
   }
 
+  if (!state.hasServerEtherscanKey && !apiKey) {
+    setLoadStatus('error', 'Add an Etherscan API key, or set ETHERSCAN_API_KEY on the server.');
+    return;
+  }
+
   clearVerifyOutput();
-  setLoadStatus('info', 'Loading source files from Etherscan...');
+  setLoadStatus('info', 'Pulling verified source from Etherscan...');
   elements.loadFilesBtn.disabled = true;
 
   try {
@@ -431,13 +504,13 @@ async function loadFiles() {
     state.verifyResults = [];
 
     renderFileList();
-    elements.filesPanel.hidden = false;
-    elements.verifyPanel.hidden = false;
+    revealPanel(elements.filesPanel);
+    setTimeout(() => revealPanel(elements.verifyPanel), 60);
 
     const knownLibCount = state.files.filter((file) => file.isKnownLib).length;
     setLoadStatus(
       'success',
-      `Loaded ${state.files.length} files from ${state.contractName}. ${knownLibCount} OpenZeppelin files were unchecked by default.`
+      `Source loaded: ${state.files.length} files from ${state.contractName}. ${knownLibCount} OpenZeppelin files were unselected by default.`
     );
 
     persistState();
@@ -513,6 +586,8 @@ function uncheckLibDirectoryFiles() {
 }
 
 async function verifySelection() {
+  bumpButton(elements.verifyBtn);
+  runImpact(elements.verifyPanel);
   syncSelectionsFromDom({ persist: false });
 
   const repoUrl = elements.repoUrl.value.trim();
@@ -520,17 +595,17 @@ async function verifySelection() {
   const selectedFiles = gatherSelectedFiles();
 
   if (!repoUrl) {
-    setVerifyStatus('error', 'Enter a GitHub repository URL.');
+    setVerifyStatus('error', 'Add a GitHub repository URL to run proof.');
     return;
   }
 
   if (selectedFiles.length === 0) {
-    setVerifyStatus('error', 'Select at least one file to verify.');
+    setVerifyStatus('error', 'Select at least one file to compare.');
     return;
   }
 
   elements.verifyBtn.disabled = true;
-  setVerifyStatus('info', 'Verifying selected files against GitHub...');
+  setVerifyStatus('info', 'Running source proof against GitHub...');
   state.verifyResults = [];
   elements.verifyResults.innerHTML = '';
   persistState();
@@ -552,17 +627,18 @@ async function verifySelection() {
     if (body.ok) {
       setVerifyStatus(
         'success',
-        `All ${body.totalCompared} selected files match commit ${body.commitSha.slice(0, 12)}.`
+        `Proof complete: all ${body.totalCompared} selected files match commit ${body.commitSha.slice(0, 12)}.`
       );
     } else {
       setVerifyStatus(
         'error',
-        `${body.mismatchCount} of ${body.totalCompared} files do not match commit ${body.commitSha.slice(0, 12)}.`
+        `Proof failed: ${body.mismatchCount} of ${body.totalCompared} files differ from commit ${body.commitSha.slice(0, 12)}.`
       );
     }
 
     state.verifyResults = Array.isArray(body.fileResults) ? body.fileResults : [];
     renderVerifyResults(state.verifyResults);
+    runImpact(elements.verifyPanel);
     persistState();
   } catch (error) {
     state.verifyResults = [];
@@ -574,22 +650,30 @@ async function verifySelection() {
   }
 }
 
-restoreState();
+function bindEvents() {
+  for (const input of [
+    elements.contractAddress,
+    elements.chainId,
+    elements.etherscanApiKey,
+    elements.repoUrl,
+    elements.commitHash
+  ]) {
+    input.addEventListener('input', persistState);
+  }
 
-for (const input of [
-  elements.contractAddress,
-  elements.chainId,
-  elements.etherscanApiKey,
-  elements.repoUrl,
-  elements.commitHash
-]) {
-  input.addEventListener('input', persistState);
+  elements.loadFilesBtn.addEventListener('click', loadFiles);
+  elements.verifyBtn.addEventListener('click', verifySelection);
+  elements.checkAllBtn.addEventListener('click', () => checkAllFiles(true));
+  elements.uncheckAllBtn.addEventListener('click', () => checkAllFiles(false));
+  elements.uncheckLibBtn.addEventListener('click', uncheckLibDirectoryFiles);
+  elements.uncheckLibsBtn.addEventListener('click', uncheckOpenZeppelinFiles);
+  elements.filesList.addEventListener('change', () => syncSelectionsFromDom());
 }
 
-elements.loadFilesBtn.addEventListener('click', loadFiles);
-elements.verifyBtn.addEventListener('click', verifySelection);
-elements.checkAllBtn.addEventListener('click', () => checkAllFiles(true));
-elements.uncheckAllBtn.addEventListener('click', () => checkAllFiles(false));
-elements.uncheckLibBtn.addEventListener('click', uncheckLibDirectoryFiles);
-elements.uncheckLibsBtn.addEventListener('click', uncheckOpenZeppelinFiles);
-elements.filesList.addEventListener('change', () => syncSelectionsFromDom());
+function initialize() {
+  restoreState();
+  bindEvents();
+  void fetchRuntimeConfig();
+}
+
+initialize();

@@ -13,6 +13,13 @@ const DEFAULT_CHAIN_ID = '1';
 app.use(express.json({ limit: '8mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+app.get('/api/config', (_req, res) => {
+  const hasServerEtherscanKey = Boolean(String(process.env.ETHERSCAN_API_KEY || '').trim());
+  return res.json({
+    hasServerEtherscanKey
+  });
+});
+
 function normalizePath(filePath) {
   return String(filePath || '')
     .replace(/\\/g, '/')
@@ -52,7 +59,7 @@ function stripZipRoot(entryName) {
 function getGitHubHeaders() {
   const headers = {
     Accept: 'application/vnd.github+json',
-    'User-Agent': 'etherscan-github-differ'
+    'User-Agent': 'proof-of-source'
   };
 
   const token = (process.env.GITHUB_TOKEN || '').trim();
