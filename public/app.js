@@ -174,7 +174,7 @@ function normalizeStoredFiles(candidate) {
     .filter((file) => file && typeof file.path === 'string' && typeof file.content === 'string')
     .map((file) => {
       const isKnownLib = Boolean(file.isKnownLib);
-      const selected = typeof file.selected === 'boolean' ? file.selected : !isKnownLib;
+      const selected = typeof file.selected === 'boolean' ? file.selected : !isLibDirectoryPath(file.path);
 
       return {
         path: file.path,
@@ -183,6 +183,14 @@ function normalizeStoredFiles(candidate) {
         selected
       };
     });
+}
+
+function isLibDirectoryPath(filePath) {
+  if (typeof filePath !== 'string') {
+    return false;
+  }
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  return /(^|\/)lib\//i.test(normalizedPath);
 }
 
 function updateFileMeta() {
@@ -229,7 +237,7 @@ function renderFileList() {
     checkbox.type = 'checkbox';
     checkbox.dataset.index = String(i);
 
-    const checked = typeof file.selected === 'boolean' ? file.selected : !file.isKnownLib;
+    const checked = typeof file.selected === 'boolean' ? file.selected : !isLibDirectoryPath(file.path);
     file.selected = checked;
     checkbox.checked = checked;
 
@@ -544,7 +552,7 @@ async function loadFiles() {
     state.files = Array.isArray(body.files)
       ? body.files.map((file) => ({
           ...file,
-          selected: !file.isKnownLib
+          selected: !isLibDirectoryPath(file.path)
         }))
       : [];
     state.verifyResults = [];
@@ -553,10 +561,10 @@ async function loadFiles() {
     revealPanel(elements.filesPanel);
     setTimeout(() => revealPanel(elements.verifyPanel), 60);
 
-    const knownLibCount = state.files.filter((file) => file.isKnownLib).length;
+    const libPathCount = state.files.filter((file) => isLibDirectoryPath(file.path)).length;
     setLoadStatus(
       'success',
-      `Source loaded: ${state.files.length} files from ${state.contractName}. ${knownLibCount} OpenZeppelin files were unselected by default.`
+      `Source loaded: ${state.files.length} files from ${state.contractName}. ${libPathCount} /lib files were unselected by default.`
     );
 
     persistState();

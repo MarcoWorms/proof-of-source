@@ -7,7 +7,7 @@ ProofOfSource compares verified contract files from Etherscan against a GitHub r
 ## What It Does
 
 1. Accepts a deployed contract address.
-2. Pulls verified source files from Etherscan API V2.
+2. Pulls verified source files from Etherscan API V2 (Solidity `.sol` and Vyper `.vy`).
 3. Shows file checkboxes with library shortcuts (`Uncheck OpenZeppelin`, `Uncheck /lib`, etc.).
 4. Accepts a GitHub repository URL and optional commit hash.
 5. Uses latest `main` commit when no hash is provided (falls back to default branch if needed).

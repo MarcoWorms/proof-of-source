@@ -147,7 +147,12 @@ function extractFilesFromParsedObject(parsed) {
   const objectEntries = Object.entries(parsed);
   const likelySources = objectEntries.filter(([key]) => {
     const normalized = normalizePath(key);
-    return normalized.endsWith('.sol') || normalized.startsWith('@') || normalized.includes('/');
+    return (
+      normalized.endsWith('.sol') ||
+      normalized.endsWith('.vy') ||
+      normalized.startsWith('@') ||
+      normalized.includes('/')
+    );
   });
 
   if (likelySources.length > 0) {
@@ -157,7 +162,21 @@ function extractFilesFromParsedObject(parsed) {
   return [];
 }
 
-function parseEtherscanFiles(sourceCode, contractName) {
+function inferSourceExtension(sourceCode, compilerType = '') {
+  const compiler = String(compilerType || '').toLowerCase();
+  if (compiler.includes('vyper')) {
+    return '.vy';
+  }
+
+  const source = String(sourceCode || '');
+  if (/^\s*#\s*@?version\b/im.test(source)) {
+    return '.vy';
+  }
+
+  return '.sol';
+}
+
+function parseEtherscanFiles(sourceCode, contractName, compilerType = '') {
   const trimmed = String(sourceCode || '').trim();
   if (!trimmed) {
     return [];
@@ -217,7 +236,8 @@ function parseEtherscanFiles(sourceCode, contractName) {
     }
   }
 
-  const fallbackName = contractName ? `${contractName}.sol` : 'Contract.sol';
+  const extension = inferSourceExtension(trimmed, compilerType);
+  const fallbackName = contractName ? `${contractName}${extension}` : `Contract${extension}`;
   return [{ path: fallbackName, content: normalizeContent(trimmed) }];
 }
 
@@ -255,13 +275,14 @@ async function fetchEtherscanSources(address, apiKey, chainId = DEFAULT_CHAIN_ID
 
   const contractResult = data.result[0];
   const contractName = String(contractResult.ContractName || 'Contract');
+  const compilerType = String(contractResult.CompilerType || '');
   const sourceCode = String(contractResult.SourceCode || '');
 
   if (!sourceCode.trim()) {
     throw new Error('No verified source code found for this address on Etherscan.');
   }
 
-  const files = parseEtherscanFiles(sourceCode, contractName);
+  const files = parseEtherscanFiles(sourceCode, contractName, compilerType);
   if (files.length === 0) {
     throw new Error('Etherscan returned source code, but no files could be parsed.');
   }
