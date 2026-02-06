@@ -28,7 +28,6 @@ const elements = {
   checkAllBtn: document.getElementById('check-all-btn'),
   uncheckAllBtn: document.getElementById('uncheck-all-btn'),
   uncheckLibBtn: document.getElementById('uncheck-lib-btn'),
-  uncheckLibsBtn: document.getElementById('uncheck-libs-btn'),
   verifyPanel: document.getElementById('verify-panel'),
   repoList: document.getElementById('repo-list'),
   addRepoBtn: document.getElementById('add-repo-btn'),
@@ -68,6 +67,7 @@ function setStatus(target, type, message) {
     return;
   }
 
+  target.hidden = !message;
   target.className = `status ${type}`;
   target.textContent = message;
 }
@@ -554,19 +554,8 @@ function normalizeStoredRepoFiles(candidate) {
 }
 
 function updateFileMeta() {
-  const selectedCount = state.files.filter((file) => file.selected).length;
-  const total = state.files.length;
-  const uniqueAddresses = new Set(
-    state.files
-      .map((file) => normalizeAddress(file.sourceAddress))
-      .filter(Boolean)
-  ).size;
-
-  const addressFragment = uniqueAddresses > 0
-    ? ` across ${uniqueAddresses} address${uniqueAddresses === 1 ? '' : 'es'}`
-    : '';
-
-  elements.fileMeta.textContent = `${selectedCount}/${total} files selected${addressFragment}.`;
+  elements.fileMeta.textContent = '';
+  elements.fileMeta.hidden = true;
 }
 
 function refreshRowSelectionStyles() {
@@ -633,13 +622,6 @@ function renderFileList() {
       contractTag.className = 'file-tag file-tag-contract';
       contractTag.textContent = file.sourceContractName;
       tags.appendChild(contractTag);
-    }
-
-    if (file.isKnownLib) {
-      const libTag = document.createElement('span');
-      libTag.className = 'file-tag';
-      libTag.textContent = 'OpenZeppelin';
-      tags.appendChild(libTag);
     }
 
     row.appendChild(checkbox);
@@ -873,6 +855,30 @@ function setPreferredRepoFileIdForSource(sourceAddress, sourcePath, preferredRep
   return true;
 }
 
+function formatRepoFileLabel(repoFile) {
+  if (!repoFile || typeof repoFile !== 'object') {
+    return '';
+  }
+
+  const rawRepoLabel = String(repoFile.repoLabel || 'Repository').trim();
+  const withoutSha = rawRepoLabel.split('@')[0];
+  const repoName = withoutSha.includes('/') ? withoutSha.split('/').pop() : withoutSha;
+  const normalizedPath = normalizeClientPath(repoFile.path || '');
+  if (!normalizedPath) {
+    return repoName;
+  }
+
+  return `${repoName}/${normalizedPath}`;
+}
+
+function isManualOverrideExactMatchReason(reason) {
+  const message = String(reason || '');
+  return (
+    message.includes('Exact content match using manual repo file override.') ||
+    message.includes('Exact content match using manual repo path override.')
+  );
+}
+
 function createManualPathEditor(result) {
   const fileState = getSourceFileState(result.sourceAddress, result.path);
   const manualPreferredId = String(fileState?.preferredRepoFileId || '').trim();
@@ -888,19 +894,13 @@ function createManualPathEditor(result) {
   toggle.type = 'button';
   toggle.className = 'matched-path-link';
   toggle.textContent = activeRepoFile
-    ? `Selected repo file: ${activeRepoFile.display}`
+    ? `File: ${formatRepoFileLabel(activeRepoFile)}`
     : 'No repo file selected. Click to choose manually.';
   wrapper.appendChild(toggle);
 
   const panel = document.createElement('div');
   panel.className = 'manual-path-panel';
   panel.hidden = true;
-
-  const helper = document.createElement('p');
-  helper.className = 'manual-path-help';
-  helper.textContent =
-    'Pick any file from any loaded repository snapshot, then re-run proof for this contract.';
-  panel.appendChild(helper);
 
   const input = document.createElement('input');
   input.type = 'text';
@@ -1004,7 +1004,13 @@ function renderVerifyResults(fileResults) {
     if (result.reason) {
       const reason = document.createElement('p');
       reason.className = 'reason';
-      reason.textContent = result.reason;
+      if (isManualOverrideExactMatchReason(result.reason)) {
+        reason.classList.add('reason-manual-check');
+        reason.textContent = '✓ Correct';
+      } else {
+        reason.textContent = result.reason;
+      }
+
       if (result.reason.includes('Exact content and path match.')) {
         reason.classList.add('reason-exact-match');
       }
@@ -1229,25 +1235,6 @@ function checkAllFiles(checked) {
   persistState();
 }
 
-function uncheckOpenZeppelinFiles() {
-  const boxes = elements.filesList.querySelectorAll('input[type="checkbox"]');
-  for (const box of boxes) {
-    const index = Number(box.dataset.index);
-    const file = state.files[index];
-    if (!file) {
-      continue;
-    }
-
-    const shouldCheck = !file.isKnownLib;
-    box.checked = shouldCheck;
-    file.selected = shouldCheck;
-  }
-
-  updateFileMeta();
-  refreshRowSelectionStyles();
-  persistState();
-}
-
 function uncheckLibDirectoryFiles() {
   const libPathRegex = /(^|\/)lib\//i;
   const boxes = elements.filesList.querySelectorAll('input[type="checkbox"]');
@@ -1309,10 +1296,10 @@ async function verifySelection() {
       throw new Error(body.error || 'Verification failed.');
     }
 
-    const repoCount = Array.isArray(body.repoSummaries) ? body.repoSummaries.length : repos.length;
     if (body.ok) {
-      setVerifyStatus('success', `Proof complete: all ${body.totalCompared} selected files match across ${repoCount} repo snapshot(s).`);
+      setVerifyStatus('success', '');
     } else {
+      const repoCount = Array.isArray(body.repoSummaries) ? body.repoSummaries.length : repos.length;
       setVerifyStatus('error', `Proof failed: ${body.mismatchCount} of ${body.totalCompared} files differ across ${repoCount} repo snapshot(s).`);
     }
 
@@ -1377,7 +1364,6 @@ function bindEvents() {
   elements.checkAllBtn.addEventListener('click', () => checkAllFiles(true));
   elements.uncheckAllBtn.addEventListener('click', () => checkAllFiles(false));
   elements.uncheckLibBtn.addEventListener('click', uncheckLibDirectoryFiles);
-  elements.uncheckLibsBtn.addEventListener('click', uncheckOpenZeppelinFiles);
   elements.filesList.addEventListener('change', () => syncSelectionsFromDom());
 
   refreshButtonFX();
