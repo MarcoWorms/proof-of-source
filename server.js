@@ -30,7 +30,9 @@ function normalizePath(filePath) {
 }
 
 function normalizeContent(content) {
-  return String(content || '').replace(/\r\n/g, '\n');
+  return String(content || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n+$/g, '');
 }
 
 function normalizeNameForMatch(name) {

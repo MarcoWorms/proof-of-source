@@ -728,11 +728,7 @@ async function loadFiles() {
     revealPanel(elements.filesPanel);
     setTimeout(() => revealPanel(elements.verifyPanel), 60);
 
-    const libPathCount = state.files.filter((file) => isLibDirectoryPath(file.path)).length;
-    setLoadStatus(
-      'success',
-      `Source loaded: ${state.files.length} files from ${state.contractName}. ${libPathCount} /lib files were unselected by default.`
-    );
+    setLoadStatus('success', `Source loaded: ${state.files.length} files from ${state.contractName}.`);
 
     persistState();
   } catch (error) {
