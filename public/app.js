@@ -1,19 +1,22 @@
-const STORAGE_KEY = 'proofOfSource.state.v2';
+const STORAGE_KEY = 'proofOfSource.state.v3';
 const REPO_FILE_DATALIST_ID = 'repo-file-options';
+const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
 
 const state = {
-  contractName: '',
   files: [],
   repoFiles: [],
   verifyResults: [],
   loadStatus: { type: 'info', message: '' },
   verifyStatus: { type: 'info', message: '' },
-  hasServerEtherscanKey: false
+  hasServerEtherscanKey: false,
+  addressSummaries: [],
+  verifiedRepos: []
 };
 
 const elements = {
   step1Panel: document.getElementById('step-1-panel'),
-  contractAddress: document.getElementById('contract-address'),
+  addressList: document.getElementById('address-list'),
+  addAddressBtn: document.getElementById('add-address-btn'),
   chainId: document.getElementById('chain-id'),
   etherscanKeyGroup: document.getElementById('etherscan-key-group'),
   etherscanApiKey: document.getElementById('etherscan-api-key'),
@@ -27,14 +30,44 @@ const elements = {
   uncheckLibBtn: document.getElementById('uncheck-lib-btn'),
   uncheckLibsBtn: document.getElementById('uncheck-libs-btn'),
   verifyPanel: document.getElementById('verify-panel'),
-  repoUrl: document.getElementById('repo-url'),
-  commitHash: document.getElementById('commit-hash'),
+  repoList: document.getElementById('repo-list'),
+  addRepoBtn: document.getElementById('add-repo-btn'),
   verifyBtn: document.getElementById('verify-btn'),
   verifyStatus: document.getElementById('verify-status'),
   verifyResults: document.getElementById('verify-results')
 };
 
+function normalizeClientPath(filePath) {
+  return String(filePath || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .replace(/^\.(\/|\\)/, '')
+    .replace(/^\/+/, '')
+    .trim();
+}
+
+function normalizeAddress(address) {
+  return String(address || '').trim().toLowerCase();
+}
+
+function sourceFileKey(sourceAddress, sourcePath) {
+  return `${normalizeAddress(sourceAddress)}::${normalizeClientPath(sourcePath)}`;
+}
+
+function isLibDirectoryPath(filePath) {
+  if (typeof filePath !== 'string') {
+    return false;
+  }
+
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  return /(^|\/)lib\//i.test(normalizedPath);
+}
+
 function setStatus(target, type, message) {
+  if (!target) {
+    return;
+  }
+
   target.className = `status ${type}`;
   target.textContent = message;
 }
@@ -42,6 +75,7 @@ function setStatus(target, type, message) {
 function setLoadStatus(type, message, options = {}) {
   state.loadStatus = { type, message };
   setStatus(elements.loadStatus, type, message);
+
   if (options.persist !== false) {
     persistState();
   }
@@ -50,6 +84,7 @@ function setLoadStatus(type, message, options = {}) {
 function setVerifyStatus(type, message, options = {}) {
   state.verifyStatus = { type, message };
   setStatus(elements.verifyStatus, type, message);
+
   if (options.persist !== false) {
     persistState();
   }
@@ -121,19 +156,244 @@ function revealPanel(panel) {
   runImpact(panel);
 }
 
+function createAddressRow(value = '') {
+  const row = document.createElement('div');
+  row.className = 'dynamic-row address-row';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'address-input';
+  input.placeholder = '0x...';
+  input.autocomplete = 'off';
+  input.value = value;
+
+  const removeButton = document.createElement('button');
+  removeButton.type = 'button';
+  removeButton.className = 'btn ghost mini-btn row-remove-btn remove-address-btn';
+  removeButton.textContent = 'Remove';
+
+  row.appendChild(input);
+  row.appendChild(removeButton);
+  return row;
+}
+
+function createRepoRow(repoUrl = '', commitHash = '') {
+  const row = document.createElement('div');
+  row.className = 'dynamic-row repo-row';
+
+  const repoInput = document.createElement('input');
+  repoInput.type = 'text';
+  repoInput.className = 'repo-url-input';
+  repoInput.placeholder = 'https://github.com/owner/repo';
+  repoInput.autocomplete = 'off';
+  repoInput.value = repoUrl;
+
+  const commitInput = document.createElement('input');
+  commitInput.type = 'text';
+  commitInput.className = 'repo-commit-input';
+  commitInput.placeholder = 'Optional commit hash';
+  commitInput.autocomplete = 'off';
+  commitInput.value = commitHash;
+
+  const removeButton = document.createElement('button');
+  removeButton.type = 'button';
+  removeButton.className = 'btn ghost mini-btn row-remove-btn remove-repo-btn';
+  removeButton.textContent = 'Remove';
+
+  row.appendChild(repoInput);
+  row.appendChild(commitInput);
+  row.appendChild(removeButton);
+  return row;
+}
+
+function getAddressRows() {
+  return Array.from(elements.addressList.querySelectorAll('.address-row'));
+}
+
+function getRepoRows() {
+  return Array.from(elements.repoList.querySelectorAll('.repo-row'));
+}
+
+function updateAddressRemoveButtons() {
+  const rows = getAddressRows();
+  const singleRow = rows.length <= 1;
+
+  for (const row of rows) {
+    const button = row.querySelector('.remove-address-btn');
+    if (!button) {
+      continue;
+    }
+
+    button.disabled = singleRow;
+    button.classList.toggle('is-hidden', singleRow);
+  }
+}
+
+function updateRepoRemoveButtons() {
+  const rows = getRepoRows();
+  const singleRow = rows.length <= 1;
+
+  for (const row of rows) {
+    const button = row.querySelector('.remove-repo-btn');
+    if (!button) {
+      continue;
+    }
+
+    button.disabled = singleRow;
+    button.classList.toggle('is-hidden', singleRow);
+  }
+}
+
+function renderAddressRows(values = []) {
+  elements.addressList.innerHTML = '';
+
+  const initialValues = Array.isArray(values) && values.length > 0 ? values : [''];
+  for (const value of initialValues) {
+    elements.addressList.appendChild(createAddressRow(typeof value === 'string' ? value : ''));
+  }
+
+  updateAddressRemoveButtons();
+  refreshButtonFX();
+}
+
+function renderRepoRows(entries = []) {
+  elements.repoList.innerHTML = '';
+
+  const initialEntries = Array.isArray(entries) && entries.length > 0 ? entries : [{ repoUrl: '', commitHash: '' }];
+  for (const entry of initialEntries) {
+    const repoUrl = entry && typeof entry.repoUrl === 'string' ? entry.repoUrl : '';
+    const commitHash = entry && typeof entry.commitHash === 'string' ? entry.commitHash : '';
+    elements.repoList.appendChild(createRepoRow(repoUrl, commitHash));
+  }
+
+  updateRepoRemoveButtons();
+  refreshButtonFX();
+}
+
+function addAddressRow(value = '') {
+  elements.addressList.appendChild(createAddressRow(value));
+  updateAddressRemoveButtons();
+  refreshButtonFX();
+}
+
+function addRepoRow(entry = {}) {
+  const repoUrl = entry && typeof entry.repoUrl === 'string' ? entry.repoUrl : '';
+  const commitHash = entry && typeof entry.commitHash === 'string' ? entry.commitHash : '';
+  elements.repoList.appendChild(createRepoRow(repoUrl, commitHash));
+  updateRepoRemoveButtons();
+  refreshButtonFX();
+}
+
+function removeAddressRow(button) {
+  const row = button.closest('.address-row');
+  if (!row) {
+    return;
+  }
+
+  const rows = getAddressRows();
+  if (rows.length <= 1) {
+    return;
+  }
+
+  row.remove();
+  updateAddressRemoveButtons();
+  persistState();
+}
+
+function removeRepoRow(button) {
+  const row = button.closest('.repo-row');
+  if (!row) {
+    return;
+  }
+
+  const rows = getRepoRows();
+  if (rows.length <= 1) {
+    return;
+  }
+
+  row.remove();
+  updateRepoRemoveButtons();
+  persistState();
+}
+
+function collectAddressInputValues() {
+  return getAddressRows().map((row) => {
+    const input = row.querySelector('.address-input');
+    return input ? input.value : '';
+  });
+}
+
+function collectAddressesForSubmit() {
+  const seen = new Set();
+  const output = [];
+
+  for (const rawValue of collectAddressInputValues()) {
+    const value = String(rawValue || '').trim();
+    if (!value) {
+      continue;
+    }
+
+    const key = value.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    output.push(value);
+  }
+
+  return output;
+}
+
+function collectRepoInputValues() {
+  return getRepoRows().map((row) => {
+    const repoUrlInput = row.querySelector('.repo-url-input');
+    const commitHashInput = row.querySelector('.repo-commit-input');
+
+    return {
+      repoUrl: repoUrlInput ? repoUrlInput.value : '',
+      commitHash: commitHashInput ? commitHashInput.value : ''
+    };
+  });
+}
+
+function collectReposForSubmit() {
+  const seen = new Set();
+  const output = [];
+
+  for (const item of collectRepoInputValues()) {
+    const repoUrl = String(item?.repoUrl || '').trim();
+    const commitHash = String(item?.commitHash || '').trim();
+    if (!repoUrl) {
+      continue;
+    }
+
+    const key = `${repoUrl.toLowerCase()}::${commitHash.toLowerCase()}`;
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    output.push({ repoUrl, commitHash });
+  }
+
+  return output;
+}
+
 function persistState() {
   try {
     const snapshot = {
       inputs: {
-        contractAddress: elements.contractAddress.value,
+        addresses: collectAddressInputValues(),
         chainId: elements.chainId.value,
         etherscanApiKey: elements.etherscanApiKey.value,
-        repoUrl: elements.repoUrl.value,
-        commitHash: elements.commitHash.value
+        repos: collectRepoInputValues()
       },
-      contractName: state.contractName,
       files: state.files,
+      repoFiles: state.repoFiles,
       verifyResults: state.verifyResults,
+      addressSummaries: state.addressSummaries,
+      verifiedRepos: state.verifiedRepos,
       loadStatus: state.loadStatus,
       verifyStatus: state.verifyStatus
     };
@@ -167,6 +427,40 @@ function normalizeStoredStatus(candidate) {
   return { type, message };
 }
 
+function normalizeStoredAddresses(candidate) {
+  if (!Array.isArray(candidate)) {
+    return [''];
+  }
+
+  const values = candidate.map((value) => (typeof value === 'string' ? value : ''));
+  return values.length > 0 ? values : [''];
+}
+
+function normalizeStoredRepos(candidate) {
+  if (!Array.isArray(candidate)) {
+    return [{ repoUrl: '', commitHash: '' }];
+  }
+
+  const normalized = candidate
+    .map((entry) => {
+      if (typeof entry === 'string') {
+        return { repoUrl: entry, commitHash: '' };
+      }
+
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+
+      return {
+        repoUrl: typeof entry.repoUrl === 'string' ? entry.repoUrl : '',
+        commitHash: typeof entry.commitHash === 'string' ? entry.commitHash : ''
+      };
+    })
+    .filter(Boolean);
+
+  return normalized.length > 0 ? normalized : [{ repoUrl: '', commitHash: '' }];
+}
+
 function normalizeStoredFiles(candidate) {
   if (!Array.isArray(candidate)) {
     return [];
@@ -177,40 +471,102 @@ function normalizeStoredFiles(candidate) {
     .map((file) => {
       const isKnownLib = Boolean(file.isKnownLib);
       const selected = typeof file.selected === 'boolean' ? file.selected : !isLibDirectoryPath(file.path);
-      const preferredRepoPath =
-        typeof file.preferredRepoPath === 'string' ? normalizeClientPath(file.preferredRepoPath) : '';
 
       return {
-        path: file.path,
-        content: file.content,
+        path: normalizeClientPath(file.path),
+        content: String(file.content),
         isKnownLib,
         selected,
-        preferredRepoPath
+        sourceAddress: typeof file.sourceAddress === 'string' ? file.sourceAddress : '',
+        sourceContractName: typeof file.sourceContractName === 'string' ? file.sourceContractName : '',
+        preferredRepoFileId: typeof file.preferredRepoFileId === 'string' ? file.preferredRepoFileId : '',
+        preferredRepoPath:
+          typeof file.preferredRepoPath === 'string' ? normalizeClientPath(file.preferredRepoPath) : ''
       };
     });
 }
 
-function normalizeClientPath(filePath) {
-  return String(filePath || '')
-    .replace(/\\/g, '/')
-    .replace(/\/+/g, '/')
-    .replace(/^\.(\/|\\)/, '')
-    .replace(/^\/+/, '')
-    .trim();
-}
-
-function isLibDirectoryPath(filePath) {
-  if (typeof filePath !== 'string') {
-    return false;
+function normalizeStoredRepoFiles(candidate) {
+  if (!Array.isArray(candidate)) {
+    return [];
   }
-  const normalizedPath = filePath.replace(/\\/g, '/');
-  return /(^|\/)lib\//i.test(normalizedPath);
+
+  const normalized = [];
+  const seen = new Set();
+
+  for (const item of candidate) {
+    if (typeof item === 'string') {
+      const repoPath = normalizeClientPath(item);
+      if (!repoPath) {
+        continue;
+      }
+
+      const legacy = {
+        id: `legacy::${repoPath}`,
+        repoKey: 'legacy',
+        repoLabel: 'Repository',
+        path: repoPath,
+        display: `[Repository] ${repoPath}`
+      };
+
+      if (seen.has(legacy.id)) {
+        continue;
+      }
+
+      seen.add(legacy.id);
+      normalized.push(legacy);
+      continue;
+    }
+
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+
+    const repoPath = normalizeClientPath(item.path);
+    if (!repoPath) {
+      continue;
+    }
+
+    const repoKey = typeof item.repoKey === 'string' && item.repoKey ? item.repoKey : 'repo';
+    const repoLabel =
+      typeof item.repoLabel === 'string' && item.repoLabel ? item.repoLabel : 'Repository';
+    const id = typeof item.id === 'string' && item.id ? item.id : `${repoKey}::${repoPath}`;
+    const display =
+      typeof item.display === 'string' && item.display
+        ? item.display
+        : `[${repoLabel}] ${repoPath}`;
+
+    if (seen.has(id)) {
+      continue;
+    }
+
+    seen.add(id);
+    normalized.push({
+      id,
+      repoKey,
+      repoLabel,
+      path: repoPath,
+      display
+    });
+  }
+
+  return normalized;
 }
 
 function updateFileMeta() {
   const selectedCount = state.files.filter((file) => file.selected).length;
   const total = state.files.length;
-  elements.fileMeta.textContent = `${state.contractName}: ${selectedCount}/${total} files selected.`;
+  const uniqueAddresses = new Set(
+    state.files
+      .map((file) => normalizeAddress(file.sourceAddress))
+      .filter(Boolean)
+  ).size;
+
+  const addressFragment = uniqueAddresses > 0
+    ? ` across ${uniqueAddresses} address${uniqueAddresses === 1 ? '' : 'es'}`
+    : '';
+
+  elements.fileMeta.textContent = `${selectedCount}/${total} files selected${addressFragment}.`;
 }
 
 function refreshRowSelectionStyles() {
@@ -255,22 +611,40 @@ function renderFileList() {
     file.selected = checked;
     checkbox.checked = checked;
 
+    const pathWrap = document.createElement('span');
+    pathWrap.className = 'file-path-wrap';
+
+    const sourceNode = document.createElement('span');
+    sourceNode.className = 'file-source';
+    sourceNode.textContent = file.sourceAddress ? file.sourceAddress : 'unknown address';
+
     const pathNode = document.createElement('span');
     pathNode.className = 'file-path';
     pathNode.textContent = file.path;
 
-    row.appendChild(checkbox);
-    row.appendChild(pathNode);
+    pathWrap.appendChild(sourceNode);
+    pathWrap.appendChild(pathNode);
+
+    const tags = document.createElement('span');
+    tags.className = 'file-tags';
+
+    if (file.sourceContractName) {
+      const contractTag = document.createElement('span');
+      contractTag.className = 'file-tag file-tag-contract';
+      contractTag.textContent = file.sourceContractName;
+      tags.appendChild(contractTag);
+    }
 
     if (file.isKnownLib) {
-      const tag = document.createElement('span');
-      tag.className = 'file-tag';
-      tag.textContent = 'OpenZeppelin';
-      row.appendChild(tag);
-    } else {
-      const filler = document.createElement('span');
-      row.appendChild(filler);
+      const libTag = document.createElement('span');
+      libTag.className = 'file-tag';
+      libTag.textContent = 'OpenZeppelin';
+      tags.appendChild(libTag);
     }
+
+    row.appendChild(checkbox);
+    row.appendChild(pathWrap);
+    row.appendChild(tags);
 
     elements.filesList.appendChild(row);
   }
@@ -285,8 +659,15 @@ function gatherSelectedFiles() {
     .map((file) => {
       const payload = {
         path: file.path,
-        content: file.content
+        content: file.content,
+        sourceAddress: file.sourceAddress,
+        sourceContractName: file.sourceContractName
       };
+
+      const preferredRepoFileId = String(file.preferredRepoFileId || '').trim();
+      if (preferredRepoFileId) {
+        payload.preferredRepoFileId = preferredRepoFileId;
+      }
 
       const preferredRepoPath = normalizeClientPath(file.preferredRepoPath || '');
       if (preferredRepoPath) {
@@ -299,7 +680,10 @@ function gatherSelectedFiles() {
 
 function clearVerifyOutput() {
   state.verifyResults = [];
+  state.repoFiles = [];
+  state.verifiedRepos = [];
   elements.verifyResults.innerHTML = '';
+  renderRepoFileDatalist();
   setVerifyStatus('info', '', { persist: false });
   persistState();
 }
@@ -412,33 +796,90 @@ function renderRepoFileDatalist() {
   }
 
   datalist.innerHTML = '';
-  for (const repoPath of state.repoFiles) {
+
+  for (const repoFile of state.repoFiles) {
     const option = document.createElement('option');
-    option.value = repoPath;
+    option.value = repoFile.display;
     datalist.appendChild(option);
   }
 }
 
-function getSourceFileStateByPath(sourcePath) {
-  const normalizedSourcePath = normalizeClientPath(sourcePath);
-  return state.files.find((file) => normalizeClientPath(file.path) === normalizedSourcePath) || null;
+function findRepoFileById(repoFileId) {
+  const id = String(repoFileId || '').trim();
+  if (!id) {
+    return null;
+  }
+
+  return state.repoFiles.find((repoFile) => repoFile.id === id) || null;
 }
 
-function setPreferredRepoPathForSource(sourcePath, preferredRepoPath) {
-  const file = getSourceFileStateByPath(sourcePath);
+function resolveRepoFileFromInput(inputValue) {
+  const raw = String(inputValue || '').trim();
+  if (!raw) {
+    return null;
+  }
+
+  const lower = raw.toLowerCase();
+
+  const byExactDisplay = state.repoFiles.find((repoFile) => repoFile.display === raw);
+  if (byExactDisplay) {
+    return byExactDisplay;
+  }
+
+  const byDisplayCaseInsensitive = state.repoFiles.find(
+    (repoFile) => repoFile.display.toLowerCase() === lower
+  );
+  if (byDisplayCaseInsensitive) {
+    return byDisplayCaseInsensitive;
+  }
+
+  const byId = state.repoFiles.find((repoFile) => repoFile.id === raw || repoFile.id.toLowerCase() === lower);
+  if (byId) {
+    return byId;
+  }
+
+  const normalizedPath = normalizeClientPath(raw);
+  if (!normalizedPath) {
+    return null;
+  }
+
+  const pathMatches = state.repoFiles.filter(
+    (repoFile) => normalizeClientPath(repoFile.path) === normalizedPath
+  );
+
+  if (pathMatches.length === 1) {
+    return pathMatches[0];
+  }
+
+  return null;
+}
+
+function getSourceFileState(sourceAddress, sourcePath) {
+  const key = sourceFileKey(sourceAddress, sourcePath);
+  return state.files.find((file) => sourceFileKey(file.sourceAddress, file.path) === key) || null;
+}
+
+function setPreferredRepoFileIdForSource(sourceAddress, sourcePath, preferredRepoFileId) {
+  const file = getSourceFileState(sourceAddress, sourcePath);
   if (!file) {
     return false;
   }
 
-  file.preferredRepoPath = normalizeClientPath(preferredRepoPath || '');
+  file.preferredRepoFileId = String(preferredRepoFileId || '').trim();
+  if (!file.preferredRepoFileId) {
+    file.preferredRepoPath = '';
+  }
   persistState();
   return true;
 }
 
 function createManualPathEditor(result) {
-  const fileState = getSourceFileStateByPath(result.path);
-  const manualPreferred = normalizeClientPath(fileState?.preferredRepoPath || '');
-  const activePath = manualPreferred || normalizeClientPath(result.matchedPath || '');
+  const fileState = getSourceFileState(result.sourceAddress, result.path);
+  const manualPreferredId = String(fileState?.preferredRepoFileId || '').trim();
+  const activeRepoFile =
+    findRepoFileById(manualPreferredId) ||
+    findRepoFileById(result.matchedRepoFileId) ||
+    null;
 
   const wrapper = document.createElement('div');
   wrapper.className = 'manual-path-wrap';
@@ -446,8 +887,8 @@ function createManualPathEditor(result) {
   const toggle = document.createElement('button');
   toggle.type = 'button';
   toggle.className = 'matched-path-link';
-  toggle.textContent = activePath
-    ? `Selected repo file: ${activePath}`
+  toggle.textContent = activeRepoFile
+    ? `Selected repo file: ${activeRepoFile.display}`
     : 'No repo file selected. Click to choose manually.';
   wrapper.appendChild(toggle);
 
@@ -457,15 +898,16 @@ function createManualPathEditor(result) {
 
   const helper = document.createElement('p');
   helper.className = 'manual-path-help';
-  helper.textContent = 'Pick any repository file path and re-run proof for this contract.';
+  helper.textContent =
+    'Pick any file from any loaded repository snapshot, then re-run proof for this contract.';
   panel.appendChild(helper);
 
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'repo-path-input';
   input.setAttribute('list', REPO_FILE_DATALIST_ID);
-  input.placeholder = 'Type or select a repo file path';
-  input.value = activePath;
+  input.placeholder = 'Type or select: [owner/repo@sha] path/to/file.sol';
+  input.value = activeRepoFile ? activeRepoFile.display : '';
   panel.appendChild(input);
 
   const actions = document.createElement('div');
@@ -474,7 +916,7 @@ function createManualPathEditor(result) {
   const applyButton = document.createElement('button');
   applyButton.type = 'button';
   applyButton.className = 'btn ghost manual-btn';
-  applyButton.textContent = 'Use This Path';
+  applyButton.textContent = 'Use This File';
 
   const clearButton = document.createElement('button');
   clearButton.type = 'button';
@@ -490,15 +932,6 @@ function createManualPathEditor(result) {
     panel.hidden = !panel.hidden;
   };
 
-  const resolveCanonicalRepoPath = (pathValue) => {
-    const normalized = normalizeClientPath(pathValue);
-    if (!normalized) {
-      return '';
-    }
-
-    return state.repoFiles.find((repoPath) => normalizeClientPath(repoPath) === normalized) || '';
-  };
-
   toggle.addEventListener('click', togglePanel);
 
   applyButton.addEventListener('click', async () => {
@@ -506,19 +939,22 @@ function createManualPathEditor(result) {
       return;
     }
 
-    const canonicalPath = resolveCanonicalRepoPath(input.value);
-    if (!canonicalPath) {
-      setVerifyStatus('error', 'Selected repo path was not found in this repository snapshot.');
+    const repoFile = resolveRepoFileFromInput(input.value);
+    if (!repoFile) {
+      setVerifyStatus(
+        'error',
+        'Selected repo file was not found. Pick an option from the list in [repo] path format.'
+      );
       return;
     }
 
-    const updated = setPreferredRepoPathForSource(result.path, canonicalPath);
+    const updated = setPreferredRepoFileIdForSource(result.sourceAddress, result.path, repoFile.id);
     if (!updated) {
-      setVerifyStatus('error', 'Could not update manual path override for this file.');
+      setVerifyStatus('error', 'Could not update manual file override for this source file.');
       return;
     }
 
-    setVerifyStatus('info', 'Manual path applied. Re-running proof...');
+    setVerifyStatus('info', 'Manual file applied. Re-running proof...');
     await verifySelection();
   });
 
@@ -527,13 +963,13 @@ function createManualPathEditor(result) {
       return;
     }
 
-    const updated = setPreferredRepoPathForSource(result.path, '');
+    const updated = setPreferredRepoFileIdForSource(result.sourceAddress, result.path, '');
     if (!updated) {
-      setVerifyStatus('error', 'Could not clear manual path override for this file.');
+      setVerifyStatus('error', 'Could not clear manual file override for this source file.');
       return;
     }
 
-    setVerifyStatus('info', 'Manual path cleared. Re-running proof...');
+    setVerifyStatus('info', 'Manual file cleared. Re-running proof...');
     await verifySelection();
   });
 
@@ -554,7 +990,8 @@ function renderVerifyResults(fileResults) {
 
     const filePath = document.createElement('div');
     filePath.className = 'result-path';
-    filePath.textContent = result.path;
+    const sourceAddress = String(result.sourceAddress || '').trim();
+    filePath.textContent = sourceAddress ? `${sourceAddress} / ${result.path}` : result.path;
 
     const badge = document.createElement('span');
     badge.className = `badge ${result.status === 'match' ? 'match' : 'mismatch'}`;
@@ -568,7 +1005,7 @@ function renderVerifyResults(fileResults) {
       const reason = document.createElement('p');
       reason.className = 'reason';
       reason.textContent = result.reason;
-      if (result.reason.trim() === 'Exact content and path match.') {
+      if (result.reason.includes('Exact content and path match.')) {
         reason.classList.add('reason-exact-match');
       }
       card.appendChild(reason);
@@ -579,7 +1016,9 @@ function renderVerifyResults(fileResults) {
     } else if (result.matchedPath) {
       const matchedPath = document.createElement('p');
       matchedPath.className = 'matched-path';
-      matchedPath.textContent = `Matched path: ${result.matchedPath}`;
+      matchedPath.textContent = result.matchedRepoLabel
+        ? `Matched path: [${result.matchedRepoLabel}] ${result.matchedPath}`
+        : `Matched path: ${result.matchedPath}`;
       card.appendChild(matchedPath);
     }
 
@@ -606,6 +1045,7 @@ function applyRuntimeConfig() {
   if (state.hasServerEtherscanKey) {
     elements.etherscanApiKey.value = '';
   }
+
   persistState();
 }
 
@@ -632,26 +1072,34 @@ async function fetchRuntimeConfig() {
 function restoreState() {
   const stored = readPersistedState();
   if (!stored || typeof stored !== 'object') {
+    renderAddressRows(['']);
+    renderRepoRows([{ repoUrl: '', commitHash: '' }]);
     return;
   }
 
   const inputs = stored.inputs && typeof stored.inputs === 'object' ? stored.inputs : {};
 
-  elements.contractAddress.value = typeof inputs.contractAddress === 'string' ? inputs.contractAddress : '';
+  const addresses = normalizeStoredAddresses(inputs.addresses);
+  renderAddressRows(addresses);
+
+  const repos = normalizeStoredRepos(inputs.repos);
+  renderRepoRows(repos);
+
   elements.chainId.value = typeof inputs.chainId === 'string' && inputs.chainId ? inputs.chainId : '1';
   elements.etherscanApiKey.value = typeof inputs.etherscanApiKey === 'string' ? inputs.etherscanApiKey : '';
-  elements.repoUrl.value = typeof inputs.repoUrl === 'string' ? inputs.repoUrl : '';
-  elements.commitHash.value = typeof inputs.commitHash === 'string' ? inputs.commitHash : '';
 
-  state.contractName = typeof stored.contractName === 'string' ? stored.contractName : '';
   state.files = normalizeStoredFiles(stored.files);
-  state.repoFiles = [];
+  state.repoFiles = normalizeStoredRepoFiles(stored.repoFiles);
   state.verifyResults = Array.isArray(stored.verifyResults) ? stored.verifyResults : [];
+  state.addressSummaries = Array.isArray(stored.addressSummaries) ? stored.addressSummaries : [];
+  state.verifiedRepos = Array.isArray(stored.verifiedRepos) ? stored.verifiedRepos : [];
   state.loadStatus = normalizeStoredStatus(stored.loadStatus);
   state.verifyStatus = normalizeStoredStatus(stored.verifyStatus);
 
   setStatus(elements.loadStatus, state.loadStatus.type, state.loadStatus.message);
   setStatus(elements.verifyStatus, state.verifyStatus.type, state.verifyStatus.message);
+
+  renderRepoFileDatalist();
 
   if (state.files.length > 0) {
     elements.filesPanel.hidden = false;
@@ -675,12 +1123,18 @@ async function loadFiles() {
   bumpButton(elements.loadFilesBtn);
   runImpact(elements.step1Panel);
 
-  const address = elements.contractAddress.value.trim();
+  const addresses = collectAddressesForSubmit();
   const chainId = elements.chainId.value.trim() || '1';
   const apiKey = elements.etherscanApiKey.value.trim();
 
-  if (!address) {
-    setLoadStatus('error', 'Enter a contract address to start the proof.');
+  if (addresses.length === 0) {
+    setLoadStatus('error', 'Enter at least one contract address to start the proof.');
+    return;
+  }
+
+  const invalidAddress = addresses.find((address) => !ETH_ADDRESS_REGEX.test(address));
+  if (invalidAddress) {
+    setLoadStatus('error', `Invalid Ethereum address: ${invalidAddress}`);
     return;
   }
 
@@ -695,7 +1149,7 @@ async function loadFiles() {
   }
 
   clearVerifyOutput();
-  setLoadStatus('info', 'Pulling verified source from Etherscan...');
+  setLoadStatus('info', `Pulling verified source from Etherscan for ${addresses.length} address(es)...`);
   elements.loadFilesBtn.disabled = true;
 
   try {
@@ -704,7 +1158,7 @@ async function loadFiles() {
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ address, chainId, apiKey })
+      body: JSON.stringify({ addresses, chainId, apiKey })
     });
 
     const body = await response.json();
@@ -712,36 +1166,46 @@ async function loadFiles() {
       throw new Error(body.error || 'Failed to fetch files from Etherscan.');
     }
 
-    state.contractName = body.contractName || 'Contract';
+    state.addressSummaries = Array.isArray(body.addresses) ? body.addresses : [];
     state.files = Array.isArray(body.files)
       ? body.files.map((file) => ({
-          ...file,
-          selected: !isLibDirectoryPath(file.path),
+          path: normalizeClientPath(file.path),
+          content: String(file.content || ''),
+          isKnownLib: Boolean(file.isKnownLib),
+          selected: typeof file.selected === 'boolean' ? file.selected : !isLibDirectoryPath(file.path),
+          sourceAddress: typeof file.sourceAddress === 'string' ? file.sourceAddress : '',
+          sourceContractName: typeof file.sourceContractName === 'string' ? file.sourceContractName : '',
+          preferredRepoFileId: '',
           preferredRepoPath: ''
         }))
       : [];
-    state.repoFiles = [];
-    renderRepoFileDatalist();
-    state.verifyResults = [];
 
+    state.verifyResults = [];
+    state.repoFiles = [];
+    state.verifiedRepos = [];
+
+    renderRepoFileDatalist();
     renderFileList();
     revealPanel(elements.filesPanel);
     setTimeout(() => revealPanel(elements.verifyPanel), 60);
 
-    setLoadStatus('success', `Source loaded: ${state.files.length} files from ${state.contractName}.`);
-
+    const addressCount = state.addressSummaries.length > 0 ? state.addressSummaries.length : addresses.length;
+    setLoadStatus('success', `Source loaded: ${state.files.length} files from ${addressCount} address(es).`);
     persistState();
   } catch (error) {
     state.files = [];
     state.repoFiles = [];
-    renderRepoFileDatalist();
-    state.contractName = '';
+    state.addressSummaries = [];
+    state.verifiedRepos = [];
     state.verifyResults = [];
+
+    renderRepoFileDatalist();
     elements.filesPanel.hidden = true;
     elements.verifyPanel.hidden = true;
     elements.filesList.innerHTML = '';
     elements.fileMeta.textContent = '';
     elements.verifyResults.innerHTML = '';
+
     setLoadStatus('error', error.message || 'Failed to load files.');
     setVerifyStatus('info', '', { persist: false });
     persistState();
@@ -812,12 +1276,11 @@ async function verifySelection() {
   runImpact(elements.verifyPanel);
   syncSelectionsFromDom({ persist: false });
 
-  const repoUrl = elements.repoUrl.value.trim();
-  const commitHash = elements.commitHash.value.trim();
+  const repos = collectReposForSubmit();
   const selectedFiles = gatherSelectedFiles();
 
-  if (!repoUrl) {
-    setVerifyStatus('error', 'Add a GitHub repository URL to run proof.');
+  if (repos.length === 0) {
+    setVerifyStatus('error', 'Add at least one GitHub repository URL to run proof.');
     return;
   }
 
@@ -827,7 +1290,7 @@ async function verifySelection() {
   }
 
   elements.verifyBtn.disabled = true;
-  setVerifyStatus('info', 'Running source proof against GitHub...');
+  setVerifyStatus('info', 'Running source proof against GitHub snapshot(s)...');
   state.verifyResults = [];
   elements.verifyResults.innerHTML = '';
   persistState();
@@ -838,7 +1301,7 @@ async function verifySelection() {
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ repoUrl, commitHash, selectedFiles })
+      body: JSON.stringify({ repos, selectedFiles })
     });
 
     const body = await response.json();
@@ -846,21 +1309,18 @@ async function verifySelection() {
       throw new Error(body.error || 'Verification failed.');
     }
 
+    const repoCount = Array.isArray(body.repoSummaries) ? body.repoSummaries.length : repos.length;
     if (body.ok) {
-      setVerifyStatus(
-        'success',
-        `Proof complete: all ${body.totalCompared} selected files match commit ${body.commitSha.slice(0, 12)}.`
-      );
+      setVerifyStatus('success', `Proof complete: all ${body.totalCompared} selected files match across ${repoCount} repo snapshot(s).`);
     } else {
-      setVerifyStatus(
-        'error',
-        `Proof failed: ${body.mismatchCount} of ${body.totalCompared} files differ from commit ${body.commitSha.slice(0, 12)}.`
-      );
+      setVerifyStatus('error', `Proof failed: ${body.mismatchCount} of ${body.totalCompared} files differ across ${repoCount} repo snapshot(s).`);
     }
 
-    state.repoFiles = Array.isArray(body.repoFiles) ? body.repoFiles : [];
-    renderRepoFileDatalist();
+    state.repoFiles = normalizeStoredRepoFiles(body.repoFiles);
+    state.verifiedRepos = Array.isArray(body.repoSummaries) ? body.repoSummaries : [];
     state.verifyResults = Array.isArray(body.fileResults) ? body.fileResults : [];
+
+    renderRepoFileDatalist();
     renderVerifyResults(state.verifyResults);
     runImpact(elements.verifyPanel);
     persistState();
@@ -875,15 +1335,42 @@ async function verifySelection() {
 }
 
 function bindEvents() {
-  for (const input of [
-    elements.contractAddress,
-    elements.chainId,
-    elements.etherscanApiKey,
-    elements.repoUrl,
-    elements.commitHash
-  ]) {
-    input.addEventListener('input', persistState);
-  }
+  elements.chainId.addEventListener('input', persistState);
+  elements.etherscanApiKey.addEventListener('input', persistState);
+
+  elements.addAddressBtn.addEventListener('click', () => {
+    addAddressRow('');
+    persistState();
+  });
+
+  elements.addressList.addEventListener('input', () => persistState());
+  elements.addressList.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+
+    if (target.classList.contains('remove-address-btn')) {
+      removeAddressRow(target);
+    }
+  });
+
+  elements.addRepoBtn.addEventListener('click', () => {
+    addRepoRow({ repoUrl: '', commitHash: '' });
+    persistState();
+  });
+
+  elements.repoList.addEventListener('input', () => persistState());
+  elements.repoList.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+
+    if (target.classList.contains('remove-repo-btn')) {
+      removeRepoRow(target);
+    }
+  });
 
   elements.loadFilesBtn.addEventListener('click', loadFiles);
   elements.verifyBtn.addEventListener('click', verifySelection);
@@ -892,6 +1379,7 @@ function bindEvents() {
   elements.uncheckLibBtn.addEventListener('click', uncheckLibDirectoryFiles);
   elements.uncheckLibsBtn.addEventListener('click', uncheckOpenZeppelinFiles);
   elements.filesList.addEventListener('change', () => syncSelectionsFromDom());
+
   refreshButtonFX();
 }
 

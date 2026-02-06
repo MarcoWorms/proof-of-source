@@ -23,7 +23,9 @@
 
     <main class="app-shell">
       <header class="hero">
-        <p class="eyebrow">Proof, not promises.</p>
+        <a class="eyebrow eyebrow-link" href="https://yearn.fi" target="_blank" rel="noopener noreferrer">
+          Yearn.fi presents:
+        </a>
         <h1>ProofOfSource</h1>
         <p class="subtitle">
           Prove deployed contracts are the same as the open source.
@@ -33,10 +35,11 @@
       <section id="step-1-panel" class="panel step-panel">
         <h2>1. Pull Verified Source</h2>
         <div class="form-grid">
-          <label>
-            Deployed Contract Address
-            <input id="contract-address" type="text" placeholder="0x..." autocomplete="off" />
-          </label>
+          <div class="field-block span-2">
+            <label class="block-title">Deployed Contract Address(es)</label>
+            <div id="address-list" class="dynamic-list"></div>
+            <button id="add-address-btn" class="btn ghost mini-btn" type="button">+ Add Address</button>
+          </div>
           <label>
             Chain ID
             <input id="chain-id" type="text" placeholder="1" value="1" autocomplete="off" />
@@ -71,29 +74,16 @@
 
       <section id="verify-panel" class="panel step-panel" hidden>
         <h2>3. Verify Against GitHub</h2>
-        <div class="form-grid">
-          <label>
-            GitHub Repository URL
-            <input id="repo-url" type="text" placeholder="https://github.com/owner/repo" autocomplete="off" />
-          </label>
-          <label>
-            Commit Hash (Optional)
-            <input
-              id="commit-hash"
-              type="text"
-              placeholder="If empty, latest commit on main is used"
-              autocomplete="off"
-            />
-          </label>
+        <div class="field-block">
+          <label class="block-title">GitHub Repository / Commit Set</label>
+          <div id="repo-list" class="dynamic-list"></div>
+          <button id="add-repo-btn" class="btn ghost mini-btn" type="button">+ Add Repo</button>
         </div>
         <button id="verify-btn" class="btn primary" type="button">Run Proof</button>
         <p id="verify-status" class="status"></p>
         <div id="verify-results" class="verify-results"></div>
       </section>
 
-      <footer class="brand-credit">
-        <a href="https://yearn.fi" target="_blank" rel="noopener noreferrer">powered by yearn.fi</a>
-      </footer>
     </main>
 
     <script src="app.js"></script>

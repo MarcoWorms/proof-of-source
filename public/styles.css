@@ -116,6 +116,19 @@ body {
   font-weight: 800;
 }
 
+.eyebrow-link {
+  display: inline-block;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: color 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.eyebrow-link:hover {
+  color: var(--yearn-blue-night);
+  border-bottom-color: var(--yearn-blue-night);
+  transform: translateY(-1px);
+}
+
 h1 {
   margin: 0.45rem 0 0;
   font-size: clamp(2.1rem, 5vw, 4.6rem);
@@ -199,6 +212,20 @@ h2 {
   gap: 0.9rem;
 }
 
+.span-2 {
+  grid-column: span 2;
+}
+
+.field-block {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.block-title {
+  font-size: 0.97rem;
+  font-weight: 700;
+}
+
 label {
   display: grid;
   gap: 0.35rem;
@@ -234,6 +261,25 @@ input:focus {
     0 0 0 2px rgba(6, 117, 249, 0.16),
     0 0 0 1px rgba(6, 117, 249, 0.35) inset;
   transform: translateY(-1px);
+}
+
+.dynamic-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.dynamic-row {
+  display: grid;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.address-row {
+  grid-template-columns: minmax(160px, 1fr) auto;
+}
+
+.repo-row {
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.6fr) auto;
 }
 
 .btn {
@@ -304,6 +350,22 @@ input:focus {
 .btn.ghost:hover {
   border-color: rgba(6, 117, 249, 0.5);
   background: linear-gradient(180deg, #ffffff, #edf4ff);
+}
+
+.mini-btn {
+  margin-top: 0;
+  padding: 0.36rem 0.62rem;
+  font-size: 0.77rem;
+  white-space: nowrap;
+}
+
+.row-remove-btn {
+  align-self: stretch;
+}
+
+.row-remove-btn.is-hidden {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .btn:disabled {
@@ -427,6 +489,29 @@ input:focus {
   word-break: break-all;
 }
 
+.file-path-wrap {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.file-source {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #4f5c74;
+  font-family: 'Noto Sans Mono', 'SFMono-Regular', Consolas, monospace;
+  word-break: break-all;
+}
+
+.file-tags {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.34rem;
+  flex-wrap: wrap;
+}
+
 .file-tag {
   border: 1px solid rgba(6, 117, 249, 0.45);
   background: rgba(6, 117, 249, 0.08);
@@ -435,6 +520,12 @@ input:focus {
   font-weight: 700;
   padding: 0.15rem 0.5rem;
   white-space: nowrap;
+}
+
+.file-tag-contract {
+  border-color: rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.72);
+  color: #1f2432;
 }
 
 .verify-results {
@@ -820,6 +911,19 @@ input:focus {
 @media (max-width: 760px) {
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .span-2 {
+    grid-column: auto;
+  }
+
+  .address-row,
+  .repo-row {
+    grid-template-columns: 1fr;
+  }
+
+  .row-remove-btn {
+    justify-self: start;
   }
 
   .panel-head,

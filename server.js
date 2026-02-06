@@ -29,6 +29,37 @@ function normalizePath(filePath) {
     .trim();
 }
 
+function normalizeAddress(address) {
+  return String(address || '').trim().toLowerCase();
+}
+
+function buildRepoFileId(repoKey, repoPath) {
+  return `${String(repoKey || '').trim()}::${normalizePath(repoPath)}`;
+}
+
+function parseRepoFileId(repoFileId) {
+  const raw = String(repoFileId || '').trim();
+  if (!raw) {
+    return null;
+  }
+
+  const separatorIndex = raw.indexOf('::');
+  if (separatorIndex <= 0) {
+    return null;
+  }
+
+  const repoKey = raw.slice(0, separatorIndex);
+  const repoPath = normalizePath(raw.slice(separatorIndex + 2));
+  if (!repoKey || !repoPath) {
+    return null;
+  }
+
+  return {
+    repoKey,
+    repoPath
+  };
+}
+
 function normalizeContent(content) {
   return String(content || '')
     .replace(/\r\n/g, '\n')
@@ -543,43 +574,50 @@ async function getDeclaredNameIndex(index, contentCache) {
   return declaredNameToPaths;
 }
 
-function rankCandidatePaths(candidatePaths, preferredPath, sourcePath, nameHints) {
+function scoreCandidatePath(candidatePath, preferredPath, sourcePath, nameHints) {
+  const normalizedCandidate = normalizePath(candidatePath);
   const normalizedPreferred = normalizePath(preferredPath);
   const normalizedSourcePath = normalizePath(sourcePath);
   const sourceBasename = path.basename(normalizedSourcePath).toLowerCase();
   const hintList = Array.isArray(nameHints) ? nameHints.filter(Boolean) : [];
 
-  const scored = candidatePaths.map((candidatePath) => {
-    const normalizedCandidate = normalizePath(candidatePath);
-    const candidateBasename = path.basename(normalizedCandidate).toLowerCase();
-    const candidateStem = path.basename(normalizedCandidate, path.extname(normalizedCandidate));
+  const candidateBasename = path.basename(normalizedCandidate).toLowerCase();
+  const candidateStem = path.basename(normalizedCandidate, path.extname(normalizedCandidate));
 
-    let score = 0;
-    if (normalizedPreferred && normalizedCandidate === normalizedPreferred) {
-      score += 5000;
-    }
-    if (normalizedCandidate === normalizedSourcePath) {
-      score += 2500;
-    }
-    if (candidateBasename === sourceBasename) {
-      score += 1100;
-    }
+  let score = 0;
+  if (normalizedPreferred && normalizedCandidate === normalizedPreferred) {
+    score += 5000;
+  }
+  if (normalizedCandidate === normalizedSourcePath) {
+    score += 2500;
+  }
+  if (candidateBasename === sourceBasename) {
+    score += 1100;
+  }
 
-    let bestHintScore = 0;
-    for (const hint of hintList) {
-      bestHintScore = Math.max(bestHintScore, scoreNameSimilarity(hint, candidateStem));
-    }
-    score += bestHintScore;
+  let bestHintScore = 0;
+  for (const hint of hintList) {
+    bestHintScore = Math.max(bestHintScore, scoreNameSimilarity(hint, candidateStem));
+  }
+  score += bestHintScore;
 
-    const compactSourceStem = normalizeNameForMatch(path.basename(normalizedSourcePath, path.extname(normalizedSourcePath)));
-    const compactCandidateStem = normalizeNameForMatch(candidateStem);
-    if (compactSourceStem && compactCandidateStem && compactCandidateStem === compactSourceStem) {
-      score += 1400;
-    }
+  const compactSourceStem = normalizeNameForMatch(
+    path.basename(normalizedSourcePath, path.extname(normalizedSourcePath))
+  );
+  const compactCandidateStem = normalizeNameForMatch(candidateStem);
+  if (compactSourceStem && compactCandidateStem && compactCandidateStem === compactSourceStem) {
+    score += 1400;
+  }
 
-    score -= normalizedCandidate.length * 0.01;
-    return { path: normalizedCandidate, score };
-  });
+  score -= normalizedCandidate.length * 0.01;
+  return score;
+}
+
+function rankCandidatePaths(candidatePaths, preferredPath, sourcePath, nameHints) {
+  const scored = candidatePaths.map((candidatePath) => ({
+    path: normalizePath(candidatePath),
+    score: scoreCandidatePath(candidatePath, preferredPath, sourcePath, nameHints)
+  }));
 
   scored.sort((a, b) => {
     if (b.score !== a.score) {
@@ -594,73 +632,213 @@ function rankCandidatePaths(candidatePaths, preferredPath, sourcePath, nameHints
   return scored.map((item) => item.path);
 }
 
-async function compareEtherscanFile(etherscanFile, index, contentCache) {
+function rankCandidateRecords(candidateRecords, preferredRepoFileId, sourcePath, nameHints) {
+  const preferred = parseRepoFileId(preferredRepoFileId);
+
+  const scored = candidateRecords.map((candidate) => {
+    let score = scoreCandidatePath(candidate.path, preferred?.repoPath || '', sourcePath, nameHints);
+
+    if (preferred && candidate.repoKey === preferred.repoKey) {
+      score += 150;
+      if (candidate.path === preferred.repoPath) {
+        score += 5000;
+      }
+    }
+
+    return {
+      ...candidate,
+      score
+    };
+  });
+
+  scored.sort((a, b) => {
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+    if (a.path.length !== b.path.length) {
+      return a.path.length - b.path.length;
+    }
+    if (a.path !== b.path) {
+      return a.path.localeCompare(b.path);
+    }
+    return a.repoLabel.localeCompare(b.repoLabel);
+  });
+
+  return scored;
+}
+
+function createBaseResult(etherscanFile) {
+  return {
+    path: etherscanFile.path,
+    sourceAddress: normalizeAddress(etherscanFile.sourceAddress),
+    sourceContractName: String(etherscanFile.sourceContractName || '')
+  };
+}
+
+async function compareEtherscanFileAcrossRepos(etherscanFile, repoContexts, repoContextByKey) {
+  const base = createBaseResult(etherscanFile);
   const normalizedPath = normalizePath(etherscanFile.path);
   const expected = normalizeContent(etherscanFile.content || '');
+  const preferredRepoFileId = String(etherscanFile.preferredRepoFileId || '').trim();
   const preferredRepoPath = normalizePath(etherscanFile.preferredRepoPath || '');
 
-  const candidates = [];
-  const pushCandidate = (candidatePath) => {
-    if (candidatePath && index.pathToEntry.has(candidatePath) && !candidates.includes(candidatePath)) {
-      candidates.push(candidatePath);
-    }
-  };
-
-  if (preferredRepoPath) {
-    if (!index.pathToEntry.has(preferredRepoPath)) {
+  if (preferredRepoFileId) {
+    const parsedPreferred = parseRepoFileId(preferredRepoFileId);
+    if (!parsedPreferred) {
       return {
-        path: etherscanFile.path,
+        ...base,
         status: 'mismatch',
-        matchedPath: preferredRepoPath,
-        reason: 'Manual repo path was provided but does not exist in this repository snapshot.',
+        matchedPath: '',
+        matchedRepoFileId: preferredRepoFileId,
+        reason: 'Manual repo file override format is invalid.',
         diff: ''
       };
     }
 
-    const preferredContent = await getRepoContentByPath(preferredRepoPath, index, contentCache);
+    const preferredContext = repoContextByKey.get(parsedPreferred.repoKey);
+    if (!preferredContext || !preferredContext.index.pathToEntry.has(parsedPreferred.repoPath)) {
+      return {
+        ...base,
+        status: 'mismatch',
+        matchedPath: parsedPreferred.repoPath,
+        matchedRepoKey: parsedPreferred.repoKey,
+        matchedRepoLabel: preferredContext?.repoLabel || '',
+        matchedRepoFileId: preferredRepoFileId,
+        reason: 'Manual repo file override was provided but does not exist in loaded repositories.',
+        diff: ''
+      };
+    }
+
+    const preferredContent = await getRepoContentByPath(
+      parsedPreferred.repoPath,
+      preferredContext.index,
+      preferredContext.contentCache
+    );
+
     if (preferredContent === expected) {
       return {
-        path: etherscanFile.path,
+        ...base,
         status: 'match',
-        matchedPath: preferredRepoPath,
-        reason: 'Exact content match using manual repo path override.'
+        matchedPath: parsedPreferred.repoPath,
+        matchedRepoKey: preferredContext.repoKey,
+        matchedRepoLabel: preferredContext.repoLabel,
+        matchedRepoFileId: preferredRepoFileId,
+        reason: 'Exact content match using manual repo file override.'
       };
     }
 
     return {
-      path: etherscanFile.path,
+      ...base,
       status: 'mismatch',
-      matchedPath: preferredRepoPath,
-      reason: 'Manual repo path override differs in content.',
+      matchedPath: parsedPreferred.repoPath,
+      matchedRepoKey: preferredContext.repoKey,
+      matchedRepoLabel: preferredContext.repoLabel,
+      matchedRepoFileId: preferredRepoFileId,
+      reason: 'Manual repo file override differs in content.',
       diff: buildUnifiedDiff(normalizedPath, expected, preferredContent || '')
     };
   }
 
-  pushCandidate(normalizedPath);
+  if (preferredRepoPath) {
+    const preferredPathCandidates = [];
 
-  const basename = path.basename(normalizedPath).toLowerCase();
-  const basenameCandidates = index.basenameToPaths.get(basename) || [];
-  for (const candidate of basenameCandidates) {
-    pushCandidate(candidate);
-  }
-
-  const nameHints = extractContractNameHints(normalizedPath, expected);
-  for (const hint of nameHints) {
-    const normalizedHint = String(hint || '').toLowerCase();
-    const compactHint = normalizeNameForMatch(hint);
-    for (const hintKey of [normalizedHint, compactHint]) {
-      if (!hintKey) {
-        continue;
-      }
-      const stemCandidates = index.stemToPaths.get(hintKey) || [];
-      for (const candidate of stemCandidates) {
-        pushCandidate(candidate);
+    for (const context of repoContexts) {
+      if (context.index.pathToEntry.has(preferredRepoPath)) {
+        preferredPathCandidates.push({
+          id: buildRepoFileId(context.repoKey, preferredRepoPath),
+          repoKey: context.repoKey,
+          repoLabel: context.repoLabel,
+          path: preferredRepoPath
+        });
       }
     }
+
+    if (preferredPathCandidates.length === 0) {
+      return {
+        ...base,
+        status: 'mismatch',
+        matchedPath: preferredRepoPath,
+        matchedRepoFileId: '',
+        reason: 'Manual repo path override was provided but does not exist in loaded repositories.',
+        diff: ''
+      };
+    }
+
+    for (const candidate of preferredPathCandidates) {
+      const preferredContext = repoContextByKey.get(candidate.repoKey);
+      const preferredContent = await getRepoContentByPath(
+        candidate.path,
+        preferredContext.index,
+        preferredContext.contentCache
+      );
+
+      if (preferredContent === expected) {
+        return {
+          ...base,
+          status: 'match',
+          matchedPath: candidate.path,
+          matchedRepoKey: preferredContext.repoKey,
+          matchedRepoLabel: preferredContext.repoLabel,
+          matchedRepoFileId: candidate.id,
+          reason: 'Exact content match using manual repo path override.'
+        };
+      }
+    }
+
+    const fallback = preferredPathCandidates[0];
+    const fallbackContext = repoContextByKey.get(fallback.repoKey);
+    const fallbackContent = await getRepoContentByPath(
+      fallback.path,
+      fallbackContext.index,
+      fallbackContext.contentCache
+    );
+
+    return {
+      ...base,
+      status: 'mismatch',
+      matchedPath: fallback.path,
+      matchedRepoKey: fallbackContext.repoKey,
+      matchedRepoLabel: fallbackContext.repoLabel,
+      matchedRepoFileId: fallback.id,
+      reason: 'Manual repo path override differs in content.',
+      diff: buildUnifiedDiff(normalizedPath, expected, fallbackContent || '')
+    };
   }
 
-  if (nameHints.length > 0) {
-    const declaredNameIndex = await getDeclaredNameIndex(index, contentCache);
+  const candidates = new Map();
+  const pushCandidate = (context, candidatePath) => {
+    const normalizedCandidate = normalizePath(candidatePath);
+    if (!normalizedCandidate || !context.index.pathToEntry.has(normalizedCandidate)) {
+      return;
+    }
+
+    const candidateId = buildRepoFileId(context.repoKey, normalizedCandidate);
+    if (candidates.has(candidateId)) {
+      return;
+    }
+
+    candidates.set(candidateId, {
+      id: candidateId,
+      repoKey: context.repoKey,
+      repoLabel: context.repoLabel,
+      path: normalizedCandidate
+    });
+  };
+
+  const basename = path.basename(normalizedPath).toLowerCase();
+  const nameHints = extractContractNameHints(normalizedPath, expected);
+  if (etherscanFile.sourceContractName) {
+    nameHints.push(String(etherscanFile.sourceContractName).toLowerCase());
+  }
+
+  for (const context of repoContexts) {
+    pushCandidate(context, normalizedPath);
+
+    const basenameCandidates = context.index.basenameToPaths.get(basename) || [];
+    for (const candidate of basenameCandidates) {
+      pushCandidate(context, candidate);
+    }
+
     for (const hint of nameHints) {
       const normalizedHint = String(hint || '').toLowerCase();
       const compactHint = normalizeNameForMatch(hint);
@@ -668,25 +846,56 @@ async function compareEtherscanFile(etherscanFile, index, contentCache) {
         if (!hintKey) {
           continue;
         }
-        const namedCandidates = declaredNameIndex.get(hintKey) || [];
-        for (const candidate of namedCandidates) {
-          pushCandidate(candidate);
+        const stemCandidates = context.index.stemToPaths.get(hintKey) || [];
+        for (const candidate of stemCandidates) {
+          pushCandidate(context, candidate);
+        }
+      }
+    }
+
+    if (nameHints.length > 0) {
+      const declaredNameIndex = await getDeclaredNameIndex(context.index, context.contentCache);
+      for (const hint of nameHints) {
+        const normalizedHint = String(hint || '').toLowerCase();
+        const compactHint = normalizeNameForMatch(hint);
+        for (const hintKey of [normalizedHint, compactHint]) {
+          if (!hintKey) {
+            continue;
+          }
+          const namedCandidates = declaredNameIndex.get(hintKey) || [];
+          for (const candidate of namedCandidates) {
+            pushCandidate(context, candidate);
+          }
         }
       }
     }
   }
 
-  const rankedCandidates = rankCandidatePaths(candidates, preferredRepoPath, normalizedPath, nameHints);
+  const rankedCandidates = rankCandidateRecords(
+    Array.from(candidates.values()),
+    preferredRepoFileId,
+    normalizedPath,
+    nameHints
+  );
 
-  for (const candidatePath of rankedCandidates) {
-    const repoContent = await getRepoContentByPath(candidatePath, index, contentCache);
+  for (const candidate of rankedCandidates) {
+    const candidateContext = repoContextByKey.get(candidate.repoKey);
+    const repoContent = await getRepoContentByPath(
+      candidate.path,
+      candidateContext.index,
+      candidateContext.contentCache
+    );
+
     if (repoContent === expected) {
       return {
-        path: etherscanFile.path,
+        ...base,
         status: 'match',
-        matchedPath: candidatePath,
+        matchedPath: candidate.path,
+        matchedRepoKey: candidateContext.repoKey,
+        matchedRepoLabel: candidateContext.repoLabel,
+        matchedRepoFileId: candidate.id,
         reason:
-          candidatePath === normalizedPath
+          candidate.path === normalizedPath
             ? 'Exact content and path match.'
             : 'Exact content match found at a different path.'
       };
@@ -695,40 +904,77 @@ async function compareEtherscanFile(etherscanFile, index, contentCache) {
 
   if (rankedCandidates.length === 0) {
     return {
-      path: etherscanFile.path,
+      ...base,
       status: 'mismatch',
-      reason: 'No file matched by path, basename, or contract name in the repository.',
+      reason: 'No file matched by path, basename, or contract name in the loaded repositories.',
       diff: ''
     };
   }
 
-  const fallbackPath = rankedCandidates[0];
-  const fallbackContent = await getRepoContentByPath(fallbackPath, index, contentCache);
-  const fallbackBasename = path.basename(fallbackPath).toLowerCase();
+  const fallback = rankedCandidates[0];
+  const fallbackContext = repoContextByKey.get(fallback.repoKey);
+  const fallbackContent = await getRepoContentByPath(
+    fallback.path,
+    fallbackContext.index,
+    fallbackContext.contentCache
+  );
+  const fallbackBasename = path.basename(fallback.path).toLowerCase();
+  const reasonSuffix = fallbackContext?.repoLabel ? ` in ${fallbackContext.repoLabel}.` : '.';
 
   return {
-    path: etherscanFile.path,
+    ...base,
     status: 'mismatch',
-    matchedPath: fallbackPath,
+    matchedPath: fallback.path,
+    matchedRepoKey: fallbackContext?.repoKey || '',
+    matchedRepoLabel: fallbackContext?.repoLabel || '',
+    matchedRepoFileId: fallback.id,
     reason:
-      fallbackPath === normalizedPath
-        ? 'File exists at the same path, but content differs.'
+      fallback.path === normalizedPath
+        ? `File exists at the same path, but content differs${reasonSuffix}`
         : fallbackBasename === basename
-          ? 'Closest file (same basename) differs in content.'
-          : 'Closest file (matched by contract name) differs in content.',
+          ? `Closest file (same basename) differs in content${reasonSuffix}`
+          : `Closest file (matched by contract name) differs in content${reasonSuffix}`,
     diff: buildUnifiedDiff(normalizedPath, expected, fallbackContent || '')
   };
 }
 
 app.post('/api/etherscan/files', async (req, res) => {
   try {
-    const address = String(req.body?.address || '').trim();
+    const addressesInput = Array.isArray(req.body?.addresses)
+      ? req.body.addresses
+      : req.body?.address
+        ? [req.body.address]
+        : [];
     const apiKey = String(req.body?.apiKey || '').trim();
     const chainId = String(req.body?.chainId || DEFAULT_CHAIN_ID).trim() || DEFAULT_CHAIN_ID;
 
-    if (!ETH_ADDRESS_REGEX.test(address)) {
+    const addresses = [];
+    const seenAddresses = new Set();
+    for (const rawAddress of addressesInput) {
+      const normalized = String(rawAddress || '').trim();
+      if (!normalized) {
+        continue;
+      }
+
+      const key = normalized.toLowerCase();
+      if (seenAddresses.has(key)) {
+        continue;
+      }
+
+      seenAddresses.add(key);
+      addresses.push(normalized);
+    }
+
+    if (addresses.length === 0) {
       return res.status(400).json({
-        error: 'Invalid Ethereum contract address. Expected 0x followed by 40 hex chars.'
+        error: 'At least one Ethereum contract address is required.'
+      });
+    }
+
+    const invalidAddress = addresses.find((address) => !ETH_ADDRESS_REGEX.test(address));
+    if (invalidAddress) {
+      return res.status(400).json({
+        error: `Invalid Ethereum contract address: ${invalidAddress}. Expected 0x followed by 40 hex chars.`
       });
     }
 
@@ -738,21 +984,52 @@ app.post('/api/etherscan/files', async (req, res) => {
       });
     }
 
-    const { contractName, files } = await fetchEtherscanSources(address, apiKey, chainId);
+    const addressSummaries = [];
+    const preparedFiles = [];
 
-    const preparedFiles = files
-      .map((file) => ({
-        path: normalizePath(file.path),
-        content: normalizeContent(file.content),
-        isKnownLib: isKnownLibraryPath(file.path)
-      }))
-      .filter((file) => file.path && typeof file.content === 'string')
-      .sort((a, b) => a.path.localeCompare(b.path));
+    for (const address of addresses) {
+      let result;
+      try {
+        result = await fetchEtherscanSources(address, apiKey, chainId);
+      } catch (error) {
+        throw new Error(`[${address}] ${error.message || 'Failed to fetch source files from Etherscan.'}`);
+      }
+
+      const normalizedAddress = normalizeAddress(address);
+      const normalizedFiles = result.files
+        .map((file) => ({
+          path: normalizePath(file.path),
+          content: normalizeContent(file.content),
+          isKnownLib: isKnownLibraryPath(file.path),
+          sourceAddress: normalizedAddress,
+          sourceContractName: result.contractName
+        }))
+        .filter((file) => file.path && typeof file.content === 'string')
+        .sort((a, b) => a.path.localeCompare(b.path));
+
+      addressSummaries.push({
+        address: normalizedAddress,
+        contractName: result.contractName,
+        fileCount: normalizedFiles.length
+      });
+
+      preparedFiles.push(...normalizedFiles);
+    }
+
+    preparedFiles.sort((a, b) => {
+      const byAddress = a.sourceAddress.localeCompare(b.sourceAddress);
+      if (byAddress !== 0) {
+        return byAddress;
+      }
+
+      return a.path.localeCompare(b.path);
+    });
 
     return res.json({
-      contractName,
       chainId,
+      addressCount: addressSummaries.length,
       fileCount: preparedFiles.length,
+      addresses: addressSummaries,
       files: preparedFiles
     });
   } catch (error) {
@@ -764,23 +1041,44 @@ app.post('/api/etherscan/files', async (req, res) => {
 
 app.post('/api/verify', async (req, res) => {
   try {
-    const repoUrl = String(req.body?.repoUrl || '').trim();
-    const commitHash = String(req.body?.commitHash || '').trim();
+    const reposInput = Array.isArray(req.body?.repos)
+      ? req.body.repos
+      : req.body?.repoUrl
+        ? [{ repoUrl: req.body.repoUrl, commitHash: req.body.commitHash || '' }]
+        : [];
     const selectedFiles = Array.isArray(req.body?.selectedFiles) ? req.body.selectedFiles : [];
 
-    if (!repoUrl) {
-      return res.status(400).json({ error: 'GitHub repo URL is required.' });
+    const repoEntries = [];
+    const seenRepos = new Set();
+    for (const item of reposInput) {
+      if (!item || typeof item !== 'object') {
+        continue;
+      }
+
+      const repoUrl = String(item.repoUrl || '').trim();
+      const commitHash = String(item.commitHash || '').trim();
+      if (!repoUrl) {
+        continue;
+      }
+
+      const dedupeKey = `${repoUrl.toLowerCase()}::${commitHash.toLowerCase()}`;
+      if (seenRepos.has(dedupeKey)) {
+        continue;
+      }
+
+      seenRepos.add(dedupeKey);
+      repoEntries.push({
+        repoUrl,
+        commitHash
+      });
+    }
+
+    if (repoEntries.length === 0) {
+      return res.status(400).json({ error: 'At least one GitHub repo URL is required.' });
     }
 
     if (selectedFiles.length === 0) {
       return res.status(400).json({ error: 'Select at least one file before verification.' });
-    }
-
-    const parsedRepo = parseGitHubRepoUrl(repoUrl);
-    if (!parsedRepo) {
-      return res.status(400).json({
-        error: 'Invalid GitHub URL. Example: https://github.com/owner/repo'
-      });
     }
 
     const normalizedSelectedFiles = selectedFiles
@@ -788,6 +1086,9 @@ app.post('/api/verify', async (req, res) => {
       .map((item) => ({
         path: normalizePath(item.path),
         content: normalizeContent(item.content || ''),
+        sourceAddress: normalizeAddress(item.sourceAddress || ''),
+        sourceContractName: String(item.sourceContractName || ''),
+        preferredRepoFileId: String(item.preferredRepoFileId || '').trim(),
         preferredRepoPath: normalizePath(item.preferredRepoPath || '')
       }))
       .filter((item) => item.path);
@@ -798,25 +1099,76 @@ app.post('/api/verify', async (req, res) => {
       });
     }
 
-    const commitSha = await resolveCommitSha(parsedRepo.owner, parsedRepo.repo, commitHash);
-    const zip = await downloadRepoZip(parsedRepo.owner, parsedRepo.repo, commitSha);
-    const index = indexZipEntries(zip);
-    const repoFiles = Array.from(index.pathToEntry.keys()).sort((a, b) => a.localeCompare(b));
+    const repoContexts = [];
+    for (let i = 0; i < repoEntries.length; i += 1) {
+      const repoEntry = repoEntries[i];
+      const parsedRepo = parseGitHubRepoUrl(repoEntry.repoUrl);
+      if (!parsedRepo) {
+        return res.status(400).json({
+          error: `Invalid GitHub URL: ${repoEntry.repoUrl}. Example: https://github.com/owner/repo`
+        });
+      }
 
-    const contentCache = new Map();
+      const commitSha = await resolveCommitSha(parsedRepo.owner, parsedRepo.repo, repoEntry.commitHash);
+      const zip = await downloadRepoZip(parsedRepo.owner, parsedRepo.repo, commitSha);
+      const index = indexZipEntries(zip);
+      const repoKey = `r${i + 1}`;
+      const shortSha = commitSha.slice(0, 12);
+
+      repoContexts.push({
+        repoKey,
+        repoLabel: `${parsedRepo.owner}/${parsedRepo.repo}@${shortSha}`,
+        repoUrl: repoEntry.repoUrl,
+        owner: parsedRepo.owner,
+        repo: parsedRepo.repo,
+        commitSha,
+        shortSha,
+        index,
+        contentCache: new Map()
+      });
+    }
+
+    const repoContextByKey = new Map(repoContexts.map((context) => [context.repoKey, context]));
+
+    const repoFiles = [];
+    for (const context of repoContexts) {
+      const repoPaths = Array.from(context.index.pathToEntry.keys()).sort((a, b) => a.localeCompare(b));
+      for (const repoPath of repoPaths) {
+        repoFiles.push({
+          id: buildRepoFileId(context.repoKey, repoPath),
+          repoKey: context.repoKey,
+          repoLabel: context.repoLabel,
+          path: repoPath,
+          display: `[${context.repoLabel}] ${repoPath}`
+        });
+      }
+    }
+
     const fileResults = await Promise.all(
-      normalizedSelectedFiles.map((file) => compareEtherscanFile(file, index, contentCache))
+      normalizedSelectedFiles.map((file) =>
+        compareEtherscanFileAcrossRepos(file, repoContexts, repoContextByKey)
+      )
     );
 
     const mismatches = fileResults.filter((result) => result.status !== 'match');
+    const repoSummaries = repoContexts.map((context) => ({
+      repoKey: context.repoKey,
+      repoLabel: context.repoLabel,
+      repoUrl: context.repoUrl,
+      owner: context.owner,
+      repo: context.repo,
+      commitSha: context.commitSha,
+      shortSha: context.shortSha
+    }));
 
     return res.json({
       ok: mismatches.length === 0,
-      commitSha,
+      commitSha: repoContexts.length === 1 ? repoContexts[0].commitSha : null,
       totalCompared: fileResults.length,
       mismatchCount: mismatches.length,
       fileResults,
-      repoFiles
+      repoFiles,
+      repoSummaries
     });
   } catch (error) {
     return res.status(500).json({
