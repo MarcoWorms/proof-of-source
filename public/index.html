@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Etherscan vs GitHub Differ</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="hero">
+        <p class="eyebrow">On-chain source verifier</p>
+        <h1>Etherscan vs GitHub Differ</h1>
+        <p class="subtitle">
+          Compare verified contract files from Etherscan with a GitHub repository and commit.
+        </p>
+      </header>
+
+      <section class="panel">
+        <h2>1. Load Etherscan Source Files</h2>
+        <div class="form-grid">
+          <label>
+            Contract Address
+            <input id="contract-address" type="text" placeholder="0x..." autocomplete="off" />
+          </label>
+          <label>
+            Chain ID
+            <input id="chain-id" type="text" placeholder="1" value="1" autocomplete="off" />
+          </label>
+          <label>
+            Etherscan API Key
+            <input
+              id="etherscan-api-key"
+              type="password"
+              placeholder="Optional if ETHERSCAN_API_KEY is set on server"
+              autocomplete="off"
+            />
+          </label>
+        </div>
+        <button id="load-files-btn" class="btn primary">Load Contracts</button>
+        <p id="load-status" class="status"></p>
+      </section>
+
+      <section id="files-panel" class="panel" hidden>
+        <div class="panel-head">
+          <h2>2. Choose Files to Verify</h2>
+          <div class="actions">
+            <button id="check-all-btn" class="btn ghost" type="button">Check All</button>
+            <button id="uncheck-all-btn" class="btn ghost" type="button">Uncheck All</button>
+            <button id="uncheck-lib-btn" class="btn ghost" type="button">Uncheck /lib</button>
+            <button id="uncheck-libs-btn" class="btn ghost" type="button">Uncheck OpenZeppelin</button>
+          </div>
+        </div>
+        <p id="file-meta" class="file-meta"></p>
+        <div id="files-list" class="files-list"></div>
+      </section>
+
+      <section id="verify-panel" class="panel" hidden>
+        <h2>3. Compare Against GitHub Repo</h2>
+        <div class="form-grid">
+          <label>
+            GitHub Repository URL
+            <input id="repo-url" type="text" placeholder="https://github.com/owner/repo" autocomplete="off" />
+          </label>
+          <label>
+            Commit Hash (Optional)
+            <input
+              id="commit-hash"
+              type="text"
+              placeholder="If empty, latest commit on main is used"
+              autocomplete="off"
+            />
+          </label>
+        </div>
+        <button id="verify-btn" class="btn primary" type="button">Verify Selected Files</button>
+        <p id="verify-status" class="status"></p>
+        <div id="verify-results" class="verify-results"></div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
