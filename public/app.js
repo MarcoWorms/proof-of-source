@@ -1052,10 +1052,8 @@ function renderVerifyResults(fileResults) {
 }
 
 function applyRuntimeConfig() {
-  elements.etherscanKeyGroup.hidden = state.hasServerEtherscanKey;
-  if (state.hasServerEtherscanKey) {
-    elements.etherscanApiKey.value = '';
-  }
+  // Always show API key input so users can override server-side key.
+  elements.etherscanKeyGroup.hidden = false;
 
   persistState();
 }
