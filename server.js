@@ -340,6 +340,7 @@ async function downloadRepoZip(owner, repo, sha) {
 function indexZipEntries(zip) {
   const pathToEntry = new Map();
   const basenameToPaths = new Map();
+  const stemToPaths = new Map();
 
   for (const entry of Object.values(zip.files)) {
     if (entry.dir) {
@@ -359,9 +360,22 @@ function indexZipEntries(zip) {
       basenameToPaths.set(basename, []);
     }
     basenameToPaths.get(basename).push(normalized);
+
+    const stem = path.basename(normalized, path.extname(normalized)).toLowerCase();
+    if (stem) {
+      if (!stemToPaths.has(stem)) {
+        stemToPaths.set(stem, []);
+      }
+      stemToPaths.get(stem).push(normalized);
+    }
   }
 
-  return { pathToEntry, basenameToPaths };
+  return {
+    pathToEntry,
+    basenameToPaths,
+    stemToPaths,
+    declaredNameToPaths: null
+  };
 }
 
 async function getRepoContentByPath(repoPath, index, contentCache) {
@@ -386,20 +400,104 @@ function buildUnifiedDiff(filePath, expected, actual) {
   return truncateDiff(patch);
 }
 
+function extractDeclaredEntityNames(source) {
+  const content = String(source || '');
+  const names = new Set();
+  const patterns = [
+    /\b(?:abstract\s+)?contract\s+([A-Za-z_][A-Za-z0-9_]*)\b/g,
+    /\blibrary\s+([A-Za-z_][A-Za-z0-9_]*)\b/g,
+    /\binterface\s+([A-Za-z_][A-Za-z0-9_]*)\b/g
+  ];
+
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(content)) !== null) {
+      names.add(String(match[1]).toLowerCase());
+    }
+  }
+
+  return Array.from(names);
+}
+
+function extractContractNameHints(filePath, source) {
+  const hints = new Set();
+  const normalizedPath = normalizePath(filePath);
+  const stem = path.basename(normalizedPath, path.extname(normalizedPath)).toLowerCase();
+  if (stem) {
+    hints.add(stem);
+  }
+
+  const declaredNames = extractDeclaredEntityNames(source);
+  for (const name of declaredNames) {
+    hints.add(name);
+  }
+
+  return Array.from(hints);
+}
+
+async function getDeclaredNameIndex(index, contentCache) {
+  if (index.declaredNameToPaths) {
+    return index.declaredNameToPaths;
+  }
+
+  const declaredNameToPaths = new Map();
+  const sourceLikePaths = Array.from(index.pathToEntry.keys()).filter((repoPath) =>
+    /\.(sol|vy)$/i.test(repoPath)
+  );
+
+  for (const repoPath of sourceLikePaths) {
+    const content = await getRepoContentByPath(repoPath, index, contentCache);
+    if (!content) {
+      continue;
+    }
+
+    const declaredNames = extractDeclaredEntityNames(content);
+    for (const name of declaredNames) {
+      if (!declaredNameToPaths.has(name)) {
+        declaredNameToPaths.set(name, []);
+      }
+      declaredNameToPaths.get(name).push(repoPath);
+    }
+  }
+
+  index.declaredNameToPaths = declaredNameToPaths;
+  return declaredNameToPaths;
+}
+
 async function compareEtherscanFile(etherscanFile, index, contentCache) {
   const normalizedPath = normalizePath(etherscanFile.path);
   const expected = normalizeContent(etherscanFile.content || '');
 
   const candidates = [];
-  if (index.pathToEntry.has(normalizedPath)) {
-    candidates.push(normalizedPath);
-  }
+  const pushCandidate = (candidatePath) => {
+    if (candidatePath && index.pathToEntry.has(candidatePath) && !candidates.includes(candidatePath)) {
+      candidates.push(candidatePath);
+    }
+  };
+
+  pushCandidate(normalizedPath);
 
   const basename = path.basename(normalizedPath).toLowerCase();
   const basenameCandidates = index.basenameToPaths.get(basename) || [];
   for (const candidate of basenameCandidates) {
-    if (!candidates.includes(candidate)) {
-      candidates.push(candidate);
+    pushCandidate(candidate);
+  }
+
+  const nameHints = extractContractNameHints(normalizedPath, expected);
+  for (const hint of nameHints) {
+    const stemCandidates = index.stemToPaths.get(hint) || [];
+    for (const candidate of stemCandidates) {
+      pushCandidate(candidate);
+    }
+  }
+
+  if (nameHints.length > 0) {
+    const declaredNameIndex = await getDeclaredNameIndex(index, contentCache);
+    for (const hint of nameHints) {
+      const namedCandidates = declaredNameIndex.get(hint) || [];
+      for (const candidate of namedCandidates) {
+        pushCandidate(candidate);
+      }
     }
   }
 
@@ -422,13 +520,14 @@ async function compareEtherscanFile(etherscanFile, index, contentCache) {
     return {
       path: etherscanFile.path,
       status: 'mismatch',
-      reason: 'No file with the same path or basename was found in the repository.',
+      reason: 'No file matched by path, basename, or contract name in the repository.',
       diff: ''
     };
   }
 
   const fallbackPath = candidates[0];
   const fallbackContent = await getRepoContentByPath(fallbackPath, index, contentCache);
+  const fallbackBasename = path.basename(fallbackPath).toLowerCase();
 
   return {
     path: etherscanFile.path,
@@ -437,7 +536,9 @@ async function compareEtherscanFile(etherscanFile, index, contentCache) {
     reason:
       fallbackPath === normalizedPath
         ? 'File exists at the same path, but content differs.'
-        : 'Closest file (same basename) differs in content.',
+        : fallbackBasename === basename
+          ? 'Closest file (same basename) differs in content.'
+          : 'Closest file (matched by contract name) differs in content.',
     diff: buildUnifiedDiff(normalizedPath, expected, fallbackContent || '')
   };
 }

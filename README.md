@@ -42,5 +42,5 @@ Open [http://localhost:3000](http://localhost:3000).
 ## Notes
 
 - Comparison normalizes line endings (`CRLF` and `LF`) before equality checks.
-- Matching prefers exact path first, then basename fallback.
+- Matching prefers exact path, then basename, then contract-name fallback (declaration search).
 - Etherscan calls include `chainid` (default `1`, Ethereum mainnet).
