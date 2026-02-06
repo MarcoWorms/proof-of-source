@@ -212,6 +212,22 @@ h2 {
   gap: 0.9rem;
 }
 
+.step1-config {
+  margin-top: 0.85rem;
+}
+
+.step-actions {
+  margin-top: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.step-actions .btn {
+  margin-top: 0;
+}
+
 .span-2 {
   grid-column: span 2;
 }
@@ -405,10 +421,21 @@ input:focus {
   gap: 0.85rem;
 }
 
+.panel-head h2 {
+  margin: 0;
+}
+
 .actions {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.panel-head .actions .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .file-meta {

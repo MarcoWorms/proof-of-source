@@ -40,22 +40,29 @@
             <div id="address-list" class="dynamic-list"></div>
             <button id="add-address-btn" class="btn ghost mini-btn" type="button">+ Add Address</button>
           </div>
-          <label>
-            Chain ID
-            <input id="chain-id" type="text" placeholder="1" value="1" autocomplete="off" />
-          </label>
-          <label id="etherscan-key-group">
-            Etherscan API Key
-            <input
-              id="etherscan-api-key"
-              type="password"
-              placeholder="Only needed if server key is not configured"
-              autocomplete="off"
-            />
-          </label>
         </div>
-        <button id="load-files-btn" class="btn primary">Load Source</button>
-        <p id="load-status" class="status"></p>
+        <div id="step1-config" class="step1-config" hidden>
+          <div class="form-grid">
+            <label>
+              Chain ID
+              <input id="chain-id" type="text" placeholder="1" value="1" autocomplete="off" />
+            </label>
+            <label id="etherscan-key-group">
+              Etherscan API Key
+              <input
+                id="etherscan-api-key"
+                type="password"
+                placeholder="Only needed if server key is not configured"
+                autocomplete="off"
+              />
+            </label>
+          </div>
+        </div>
+        <div class="step-actions">
+          <button id="load-files-btn" class="btn primary">Load Source</button>
+          <button id="config-toggle-btn" class="btn ghost" type="button">Config</button>
+        </div>
+        <p id="load-status" class="status" hidden></p>
       </section>
 
       <section id="files-panel" class="panel step-panel" hidden>
@@ -79,7 +86,7 @@
           <button id="add-repo-btn" class="btn ghost mini-btn" type="button">+ Add Repo</button>
         </div>
         <button id="verify-btn" class="btn primary" type="button">Run Proof</button>
-        <p id="verify-status" class="status"></p>
+        <p id="verify-status" class="status" hidden></p>
         <div id="verify-results" class="verify-results"></div>
       </section>
 

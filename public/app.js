@@ -10,17 +10,20 @@ const state = {
   verifyStatus: { type: 'info', message: '' },
   hasServerEtherscanKey: false,
   addressSummaries: [],
-  verifiedRepos: []
+  verifiedRepos: [],
+  step1ConfigOpen: false
 };
 
 const elements = {
   step1Panel: document.getElementById('step-1-panel'),
   addressList: document.getElementById('address-list'),
   addAddressBtn: document.getElementById('add-address-btn'),
+  step1Config: document.getElementById('step1-config'),
   chainId: document.getElementById('chain-id'),
   etherscanKeyGroup: document.getElementById('etherscan-key-group'),
   etherscanApiKey: document.getElementById('etherscan-api-key'),
   loadFilesBtn: document.getElementById('load-files-btn'),
+  configToggleBtn: document.getElementById('config-toggle-btn'),
   loadStatus: document.getElementById('load-status'),
   filesPanel: document.getElementById('files-panel'),
   filesList: document.getElementById('files-list'),
@@ -154,6 +157,17 @@ function revealPanel(panel) {
   }
 
   runImpact(panel);
+}
+
+function setStep1ConfigOpen(open, options = {}) {
+  state.step1ConfigOpen = Boolean(open);
+  elements.step1Config.hidden = !state.step1ConfigOpen;
+  elements.configToggleBtn.textContent = state.step1ConfigOpen ? 'Hide Config' : 'Config';
+  elements.configToggleBtn.setAttribute('aria-expanded', state.step1ConfigOpen ? 'true' : 'false');
+
+  if (options.persist !== false) {
+    persistState();
+  }
 }
 
 function createAddressRow(value = '') {
@@ -394,6 +408,9 @@ function persistState() {
       verifyResults: state.verifyResults,
       addressSummaries: state.addressSummaries,
       verifiedRepos: state.verifiedRepos,
+      ui: {
+        step1ConfigOpen: state.step1ConfigOpen
+      },
       loadStatus: state.loadStatus,
       verifyStatus: state.verifyStatus
     };
@@ -871,14 +888,6 @@ function formatRepoFileLabel(repoFile) {
   return `${repoName}/${normalizedPath}`;
 }
 
-function isManualOverrideExactMatchReason(reason) {
-  const message = String(reason || '');
-  return (
-    message.includes('Exact content match using manual repo file override.') ||
-    message.includes('Exact content match using manual repo path override.')
-  );
-}
-
 function createManualPathEditor(result) {
   const fileState = getSourceFileState(result.sourceAddress, result.path);
   const manualPreferredId = String(fileState?.preferredRepoFileId || '').trim();
@@ -1001,19 +1010,15 @@ function renderVerifyResults(fileResults) {
     head.appendChild(badge);
     card.appendChild(head);
 
-    if (result.reason) {
+    if (result.status === 'match') {
+      const reason = document.createElement('p');
+      reason.className = 'reason reason-manual-check';
+      reason.textContent = '✓ Correct';
+      card.appendChild(reason);
+    } else if (result.reason) {
       const reason = document.createElement('p');
       reason.className = 'reason';
-      if (isManualOverrideExactMatchReason(result.reason)) {
-        reason.classList.add('reason-manual-check');
-        reason.textContent = '✓ Correct';
-      } else {
-        reason.textContent = result.reason;
-      }
-
-      if (result.reason.includes('Exact content and path match.')) {
-        reason.classList.add('reason-exact-match');
-      }
+      reason.textContent = result.reason;
       card.appendChild(reason);
     }
 
@@ -1069,10 +1074,6 @@ async function fetchRuntimeConfig() {
   }
 
   applyRuntimeConfig();
-
-  if (state.hasServerEtherscanKey && !state.loadStatus.message) {
-    setLoadStatus('info', 'Server Etherscan key detected. Personal key is optional.');
-  }
 }
 
 function restoreState() {
@@ -1084,6 +1085,7 @@ function restoreState() {
   }
 
   const inputs = stored.inputs && typeof stored.inputs === 'object' ? stored.inputs : {};
+  const ui = stored.ui && typeof stored.ui === 'object' ? stored.ui : {};
 
   const addresses = normalizeStoredAddresses(inputs.addresses);
   renderAddressRows(addresses);
@@ -1099,8 +1101,16 @@ function restoreState() {
   state.verifyResults = Array.isArray(stored.verifyResults) ? stored.verifyResults : [];
   state.addressSummaries = Array.isArray(stored.addressSummaries) ? stored.addressSummaries : [];
   state.verifiedRepos = Array.isArray(stored.verifiedRepos) ? stored.verifiedRepos : [];
+  state.step1ConfigOpen = Boolean(ui.step1ConfigOpen);
   state.loadStatus = normalizeStoredStatus(stored.loadStatus);
   state.verifyStatus = normalizeStoredStatus(stored.verifyStatus);
+
+  if (state.loadStatus.type !== 'error') {
+    state.loadStatus = { type: 'info', message: '' };
+  }
+  if (state.verifyStatus.type !== 'error') {
+    state.verifyStatus = { type: 'info', message: '' };
+  }
 
   setStatus(elements.loadStatus, state.loadStatus.type, state.loadStatus.message);
   setStatus(elements.verifyStatus, state.verifyStatus.type, state.verifyStatus.message);
@@ -1155,7 +1165,7 @@ async function loadFiles() {
   }
 
   clearVerifyOutput();
-  setLoadStatus('info', `Pulling verified source from Etherscan for ${addresses.length} address(es)...`);
+  setLoadStatus('info', '');
   elements.loadFilesBtn.disabled = true;
 
   try {
@@ -1195,8 +1205,7 @@ async function loadFiles() {
     revealPanel(elements.filesPanel);
     setTimeout(() => revealPanel(elements.verifyPanel), 60);
 
-    const addressCount = state.addressSummaries.length > 0 ? state.addressSummaries.length : addresses.length;
-    setLoadStatus('success', `Source loaded: ${state.files.length} files from ${addressCount} address(es).`);
+    setLoadStatus('success', '');
     persistState();
   } catch (error) {
     state.files = [];
@@ -1324,6 +1333,9 @@ async function verifySelection() {
 function bindEvents() {
   elements.chainId.addEventListener('input', persistState);
   elements.etherscanApiKey.addEventListener('input', persistState);
+  elements.configToggleBtn.addEventListener('click', () => {
+    setStep1ConfigOpen(!state.step1ConfigOpen);
+  });
 
   elements.addAddressBtn.addEventListener('click', () => {
     addAddressRow('');
@@ -1371,6 +1383,7 @@ function bindEvents() {
 
 function initialize() {
   restoreState();
+  setStep1ConfigOpen(state.step1ConfigOpen, { persist: false });
   renderRepoFileDatalist();
   bindEvents();
   void fetchRuntimeConfig();
