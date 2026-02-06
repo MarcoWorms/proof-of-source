@@ -3,6 +3,7 @@
   --yearn-blue-deep: #0457bb;
   --white: #ffffff;
   --black: #000000;
+  --ui-border: #bdbdbd;
   --ink-soft: #1a1a1a;
   --line: #000000;
   --panel-line: #000000;
@@ -118,7 +119,7 @@ label {
 
 input {
   width: 100%;
-  border: 2px solid var(--line);
+  border: 2px solid var(--ui-border);
   background: var(--white);
   color: var(--black);
   border-radius: 0;
@@ -217,7 +218,7 @@ input:focus {
 }
 
 .files-list {
-  border: 2px solid var(--line);
+  border: 2px solid var(--ui-border);
   border-radius: 0;
   max-height: 420px;
   overflow: auto;
@@ -264,7 +265,7 @@ input:focus {
 }
 
 .result-card {
-  border: 2px solid var(--line);
+  border: 2px solid var(--ui-border);
   padding: 0.72rem;
   background: var(--white);
   animation: resultPop 180ms ease-out;
@@ -305,6 +306,11 @@ input:focus {
 .reason {
   margin: 0.5rem 0 0;
   color: var(--ink-soft);
+}
+
+.reason-exact-match {
+  color: var(--yearn-blue);
+  font-weight: 700;
 }
 
 .matched-path {

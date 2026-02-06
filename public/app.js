@@ -356,6 +356,9 @@ function renderVerifyResults(fileResults) {
       const reason = document.createElement('p');
       reason.className = 'reason';
       reason.textContent = result.reason;
+      if (result.reason.trim() === 'Exact content and path match.') {
+        reason.classList.add('reason-exact-match');
+      }
       card.appendChild(reason);
     }
 
