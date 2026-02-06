@@ -453,7 +453,7 @@ input:focus {
 
 .file-row {
   display: grid;
-  grid-template-columns: 24px 1fr auto;
+  grid-template-columns: 24px 1fr;
   align-items: center;
   gap: 0.6rem;
   padding: 0.58rem 0.72rem;

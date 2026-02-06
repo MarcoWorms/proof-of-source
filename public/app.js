@@ -52,6 +52,44 @@ function normalizeAddress(address) {
   return String(address || '').trim().toLowerCase();
 }
 
+function extractAddressFromAddressInput(rawValue) {
+  const value = String(rawValue || '').trim();
+  if (!value) {
+    return '';
+  }
+
+  if (ETH_ADDRESS_REGEX.test(value)) {
+    return value;
+  }
+
+  const embeddedAddress = value.match(/0x[a-fA-F0-9]{40}/);
+  if (embeddedAddress) {
+    return embeddedAddress[0];
+  }
+
+  try {
+    const parsedUrl = new URL(value);
+    const hostname = parsedUrl.hostname.toLowerCase();
+    if (!hostname.endsWith('etherscan.io')) {
+      return '';
+    }
+
+    const pathAddress = parsedUrl.pathname.match(/0x[a-fA-F0-9]{40}/);
+    if (pathAddress) {
+      return pathAddress[0];
+    }
+
+    const queryAddress = parsedUrl.searchParams.get('a');
+    if (queryAddress && ETH_ADDRESS_REGEX.test(queryAddress)) {
+      return queryAddress;
+    }
+
+    return '';
+  } catch {
+    return '';
+  }
+}
+
 function sourceFileKey(sourceAddress, sourcePath) {
   return `${normalizeAddress(sourceAddress)}::${normalizeClientPath(sourcePath)}`;
 }
@@ -177,7 +215,7 @@ function createAddressRow(value = '') {
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'address-input';
-  input.placeholder = '0x...';
+  input.placeholder = '0x... or etherscan link';
   input.autocomplete = 'off';
   input.value = value;
 
@@ -198,7 +236,7 @@ function createRepoRow(repoUrl = '', commitHash = '') {
   const repoInput = document.createElement('input');
   repoInput.type = 'text';
   repoInput.className = 'repo-url-input';
-  repoInput.placeholder = 'https://github.com/owner/repo';
+  repoInput.placeholder = 'owner/repo or https://github.com/owner/repo';
   repoInput.autocomplete = 'off';
   repoInput.value = repoUrl;
 
@@ -341,10 +379,17 @@ function collectAddressesForSubmit() {
   const seen = new Set();
   const output = [];
 
-  for (const rawValue of collectAddressInputValues()) {
-    const value = String(rawValue || '').trim();
-    if (!value) {
+  for (const row of getAddressRows()) {
+    const input = row.querySelector('.address-input');
+    const rawValue = String(input?.value || '').trim();
+    if (!rawValue) {
       continue;
+    }
+
+    const parsedAddress = extractAddressFromAddressInput(rawValue);
+    const value = parsedAddress || rawValue;
+    if (parsedAddress && input && input.value !== parsedAddress) {
+      input.value = parsedAddress;
     }
 
     const key = value.toLowerCase();
@@ -631,19 +676,8 @@ function renderFileList() {
     pathWrap.appendChild(sourceNode);
     pathWrap.appendChild(pathNode);
 
-    const tags = document.createElement('span');
-    tags.className = 'file-tags';
-
-    if (file.sourceContractName) {
-      const contractTag = document.createElement('span');
-      contractTag.className = 'file-tag file-tag-contract';
-      contractTag.textContent = file.sourceContractName;
-      tags.appendChild(contractTag);
-    }
-
     row.appendChild(checkbox);
     row.appendChild(pathWrap);
-    row.appendChild(tags);
 
     elements.filesList.appendChild(row);
   }
@@ -1274,7 +1308,7 @@ async function verifySelection() {
   const selectedFiles = gatherSelectedFiles();
 
   if (repos.length === 0) {
-    setVerifyStatus('error', 'Add at least one GitHub repository URL to run proof.');
+    setVerifyStatus('error', 'Add at least one GitHub repository (owner/repo or URL) to run proof.');
     return;
   }
 

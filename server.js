@@ -9,6 +9,18 @@ const PORT = process.env.PORT || 3000;
 const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
 const CHAIN_ID_REGEX = /^\d+$/;
 const DEFAULT_CHAIN_ID = '1';
+const ETHERSCAN_MAX_REQUESTS_PER_SECOND = Math.max(
+  1,
+  Number.parseInt(process.env.ETHERSCAN_MAX_REQUESTS_PER_SECOND || '3', 10) || 3
+);
+const ETHERSCAN_MAX_RETRIES = Math.max(
+  0,
+  Number.parseInt(process.env.ETHERSCAN_MAX_RETRIES || '3', 10) || 3
+);
+const ETHERSCAN_RETRY_BASE_DELAY_MS = Math.max(
+  250,
+  Number.parseInt(process.env.ETHERSCAN_RETRY_BASE_DELAY_MS || '1000', 10) || 1000
+);
 
 app.use(express.json({ limit: '8mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -27,6 +39,63 @@ function normalizePath(filePath) {
     .replace(/^\.(\/|\\)/, '')
     .replace(/^\/+/, '')
     .trim();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function makeEtherscanError(message, options = {}) {
+  const error = new Error(String(message || 'Etherscan request failed.'));
+  error.retriable = Boolean(options.retriable);
+
+  const retryAfterMs = Number(options.retryAfterMs);
+  if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+    error.retryAfterMs = retryAfterMs;
+  }
+
+  return error;
+}
+
+function parseRetryAfterMs(value) {
+  if (value == null) {
+    return null;
+  }
+
+  const raw = String(value).trim();
+  if (!raw) {
+    return null;
+  }
+
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.round(seconds * 1000);
+  }
+
+  const dateMs = Date.parse(raw);
+  if (Number.isFinite(dateMs)) {
+    return Math.max(0, dateMs - Date.now());
+  }
+
+  return null;
+}
+
+function isLikelyTransientEtherscanMessage(message) {
+  const value = String(message || '').toLowerCase();
+  if (!value) {
+    return false;
+  }
+
+  return (
+    value.includes('max rate limit reached') ||
+    value.includes('rate limit') ||
+    value.includes('too many requests') ||
+    value.includes('temporarily unavailable') ||
+    value.includes('timeout') ||
+    value.includes('server busy') ||
+    value.includes('query timeout') ||
+    value.includes('try again later')
+  );
 }
 
 function normalizeAddress(address) {
@@ -176,9 +245,25 @@ async function fetchJson(url, options = {}) {
 }
 
 function parseGitHubRepoUrl(repoUrl) {
+  const rawInput = String(repoUrl || '').trim();
+  if (!rawInput) {
+    return null;
+  }
+
+  const finalize = (ownerRaw, repoRaw) => {
+    const owner = String(ownerRaw || '').trim();
+    const repo = String(repoRaw || '').replace(/\.git$/i, '').trim();
+    if (!owner || !repo) {
+      return null;
+    }
+
+    return { owner, repo };
+  };
+
   try {
-    const parsedUrl = new URL(repoUrl);
-    if (parsedUrl.hostname !== 'github.com' && parsedUrl.hostname !== 'www.github.com') {
+    const parsedUrl = new URL(rawInput);
+    const host = parsedUrl.hostname.toLowerCase();
+    if (host !== 'github.com' && host !== 'www.github.com') {
       return null;
     }
 
@@ -191,12 +276,20 @@ function parseGitHubRepoUrl(repoUrl) {
       return null;
     }
 
-    return {
-      owner: segments[0],
-      repo: segments[1].replace(/\.git$/i, '')
-    };
+    return finalize(segments[0], segments[1]);
   } catch {
-    return null;
+    const stripped = rawInput
+      .replace(/^https?:\/\//i, '')
+      .replace(/^(www\.)?github\.com\//i, '')
+      .split(/[?#]/)[0]
+      .trim();
+
+    const segments = stripped.split('/').filter(Boolean).slice(0, 2);
+    if (segments.length < 2) {
+      return null;
+    }
+
+    return finalize(segments[0], segments[1]);
   }
 }
 
@@ -339,7 +432,9 @@ function parseEtherscanFiles(sourceCode, contractName, compilerType = '') {
 async function fetchEtherscanSources(address, apiKey, chainId = DEFAULT_CHAIN_ID) {
   const key = String(apiKey || process.env.ETHERSCAN_API_KEY || '').trim();
   if (!key) {
-    throw new Error('Missing Etherscan API key. Provide it in the UI or ETHERSCAN_API_KEY env var.');
+    throw makeEtherscanError('Missing Etherscan API key. Provide it in the UI or ETHERSCAN_API_KEY env var.', {
+      retriable: false
+    });
   }
 
   const normalizedChainId = String(chainId || DEFAULT_CHAIN_ID).trim() || DEFAULT_CHAIN_ID;
@@ -359,13 +454,20 @@ async function fetchEtherscanSources(address, apiKey, chainId = DEFAULT_CHAIN_ID
   const response = await fetch(`${etherscanBaseUrl}?${params.toString()}`);
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Etherscan request failed (${response.status}): ${body.slice(0, 300)}`);
+    const retriable = [429, 500, 502, 503, 504].includes(response.status);
+    const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
+    throw makeEtherscanError(`Etherscan request failed (${response.status}): ${body.slice(0, 300)}`, {
+      retriable,
+      retryAfterMs
+    });
   }
 
   const data = await response.json();
   if (data.status !== '1' || !Array.isArray(data.result) || data.result.length === 0) {
     const message = typeof data.result === 'string' ? data.result : data.message || 'Unknown error';
-    throw new Error(`Etherscan API error: ${message}`);
+    throw makeEtherscanError(`Etherscan API error: ${message}`, {
+      retriable: isLikelyTransientEtherscanMessage(`${data.message || ''} ${message}`)
+    });
   }
 
   const contractResult = data.result[0];
@@ -383,6 +485,78 @@ async function fetchEtherscanSources(address, apiKey, chainId = DEFAULT_CHAIN_ID
   }
 
   return { contractName, files };
+}
+
+function computeEtherscanRetryDelayMs(attemptNumber, error) {
+  const retryAfterMs = Number(error?.retryAfterMs);
+  if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+    return retryAfterMs;
+  }
+
+  const exponent = Math.max(0, Number(attemptNumber) - 1);
+  const backoff = ETHERSCAN_RETRY_BASE_DELAY_MS * 2 ** exponent;
+  const jitter = Math.floor(Math.random() * 250);
+  return backoff + jitter;
+}
+
+async function fetchEtherscanSourcesWithRetry(address, apiKey, chainId = DEFAULT_CHAIN_ID) {
+  let attempt = 0;
+  const maxAttempts = ETHERSCAN_MAX_RETRIES + 1;
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      return await fetchEtherscanSources(address, apiKey, chainId);
+    } catch (error) {
+      const retriable = Boolean(error?.retriable);
+      if (!retriable || attempt >= maxAttempts) {
+        if (attempt > 1 && retriable) {
+          throw new Error(`${error.message} (after ${attempt} attempts)`);
+        }
+
+        throw error;
+      }
+
+      const delayMs = computeEtherscanRetryDelayMs(attempt, error);
+      await sleep(delayMs);
+    }
+  }
+
+  throw new Error('Etherscan retry loop exhausted.');
+}
+
+async function fetchEtherscanBatchWithRateLimit(addresses, apiKey, chainId = DEFAULT_CHAIN_ID) {
+  const results = [];
+  const batchSize = ETHERSCAN_MAX_REQUESTS_PER_SECOND;
+
+  for (let start = 0; start < addresses.length; start += batchSize) {
+    const batch = addresses.slice(start, start + batchSize);
+    const batchStartedAt = Date.now();
+
+    const batchResults = await Promise.all(
+      batch.map(async (address) => {
+        try {
+          const result = await fetchEtherscanSourcesWithRetry(address, apiKey, chainId);
+          return {
+            address,
+            result
+          };
+        } catch (error) {
+          throw new Error(`[${address}] ${error.message || 'Failed to fetch source files from Etherscan.'}`);
+        }
+      })
+    );
+    results.push(...batchResults);
+
+    if (start + batchSize < addresses.length) {
+      const elapsedMs = Date.now() - batchStartedAt;
+      if (elapsedMs < 1000) {
+        await sleep(1000 - elapsedMs);
+      }
+    }
+  }
+
+  return results;
 }
 
 async function resolveCommitSha(owner, repo, commitHash) {
@@ -987,13 +1161,17 @@ app.post('/api/etherscan/files', async (req, res) => {
     const addressSummaries = [];
     const preparedFiles = [];
 
-    for (const address of addresses) {
-      let result;
-      try {
-        result = await fetchEtherscanSources(address, apiKey, chainId);
-      } catch (error) {
-        throw new Error(`[${address}] ${error.message || 'Failed to fetch source files from Etherscan.'}`);
-      }
+    let fetchedAddresses;
+    try {
+      fetchedAddresses = await fetchEtherscanBatchWithRateLimit(addresses, apiKey, chainId);
+    } catch (error) {
+      const message = error?.message || 'Failed to fetch source files from Etherscan.';
+      throw new Error(message);
+    }
+
+    for (const item of fetchedAddresses) {
+      const address = item.address;
+      const result = item.result;
 
       const normalizedAddress = normalizeAddress(address);
       const normalizedFiles = result.files
@@ -1105,7 +1283,7 @@ app.post('/api/verify', async (req, res) => {
       const parsedRepo = parseGitHubRepoUrl(repoEntry.repoUrl);
       if (!parsedRepo) {
         return res.status(400).json({
-          error: `Invalid GitHub URL: ${repoEntry.repoUrl}. Example: https://github.com/owner/repo`
+          error: `Invalid GitHub repository: ${repoEntry.repoUrl}. Use owner/repo or https://github.com/owner/repo`
         });
       }
 
