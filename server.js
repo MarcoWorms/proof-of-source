@@ -33,6 +33,68 @@ function normalizeContent(content) {
   return String(content || '').replace(/\r\n/g, '\n');
 }
 
+function normalizeNameForMatch(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function tokenizeNameForMatch(name) {
+  const spaced = String(name || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[^a-zA-Z0-9]+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  if (!spaced) {
+    return [];
+  }
+
+  return spaced.split(/\s+/).filter(Boolean);
+}
+
+function scoreNameSimilarity(hintName, candidateName) {
+  const hintNorm = normalizeNameForMatch(hintName);
+  const candidateNorm = normalizeNameForMatch(candidateName);
+  if (!hintNorm || !candidateNorm) {
+    return 0;
+  }
+
+  if (hintNorm === candidateNorm) {
+    return 1200;
+  }
+
+  let score = 0;
+
+  if (candidateNorm.startsWith(hintNorm)) {
+    score += 760 - Math.min(260, candidateNorm.length - hintNorm.length);
+  }
+  if (hintNorm.startsWith(candidateNorm)) {
+    score += 520 - Math.min(220, hintNorm.length - candidateNorm.length);
+  }
+  if (candidateNorm.includes(hintNorm) || hintNorm.includes(candidateNorm)) {
+    score += 330 - Math.min(180, Math.abs(candidateNorm.length - hintNorm.length));
+  }
+
+  const hintTokens = tokenizeNameForMatch(hintName);
+  const candidateTokens = tokenizeNameForMatch(candidateName);
+  const candidateTokenSet = new Set(candidateTokens);
+  let overlap = 0;
+  for (const token of hintTokens) {
+    if (candidateTokenSet.has(token)) {
+      overlap += 1;
+    }
+  }
+  score += overlap * 90;
+
+  if (hintTokens[0] && candidateTokens[0] && hintTokens[0] === candidateTokens[0]) {
+    score += 48;
+  }
+
+  score -= Math.abs(candidateNorm.length - hintNorm.length) * 4;
+  return score;
+}
+
 function isKnownLibraryPath(filePath) {
   const value = normalizePath(filePath).toLowerCase();
   return value.includes('openzeppelin') || value.startsWith('@openzeppelin/');
@@ -341,6 +403,17 @@ function indexZipEntries(zip) {
   const pathToEntry = new Map();
   const basenameToPaths = new Map();
   const stemToPaths = new Map();
+  const addMapping = (map, key, value) => {
+    if (!key) {
+      return;
+    }
+    if (!map.has(key)) {
+      map.set(key, []);
+    }
+    if (!map.get(key).includes(value)) {
+      map.get(key).push(value);
+    }
+  };
 
   for (const entry of Object.values(zip.files)) {
     if (entry.dir) {
@@ -356,17 +429,13 @@ function indexZipEntries(zip) {
     pathToEntry.set(normalized, entry);
 
     const basename = path.basename(normalized).toLowerCase();
-    if (!basenameToPaths.has(basename)) {
-      basenameToPaths.set(basename, []);
-    }
-    basenameToPaths.get(basename).push(normalized);
+    addMapping(basenameToPaths, basename, normalized);
+    addMapping(basenameToPaths, normalizeNameForMatch(basename), normalized);
 
     const stem = path.basename(normalized, path.extname(normalized)).toLowerCase();
     if (stem) {
-      if (!stemToPaths.has(stem)) {
-        stemToPaths.set(stem, []);
-      }
-      stemToPaths.get(stem).push(normalized);
+      addMapping(stemToPaths, stem, normalized);
+      addMapping(stemToPaths, normalizeNameForMatch(stem), normalized);
     }
   }
 
@@ -453,10 +522,18 @@ async function getDeclaredNameIndex(index, contentCache) {
 
     const declaredNames = extractDeclaredEntityNames(content);
     for (const name of declaredNames) {
-      if (!declaredNameToPaths.has(name)) {
-        declaredNameToPaths.set(name, []);
+      const keys = [name, normalizeNameForMatch(name)];
+      for (const key of keys) {
+        if (!key) {
+          continue;
+        }
+        if (!declaredNameToPaths.has(key)) {
+          declaredNameToPaths.set(key, []);
+        }
+        if (!declaredNameToPaths.get(key).includes(repoPath)) {
+          declaredNameToPaths.get(key).push(repoPath);
+        }
       }
-      declaredNameToPaths.get(name).push(repoPath);
     }
   }
 
@@ -464,9 +541,61 @@ async function getDeclaredNameIndex(index, contentCache) {
   return declaredNameToPaths;
 }
 
+function rankCandidatePaths(candidatePaths, preferredPath, sourcePath, nameHints) {
+  const normalizedPreferred = normalizePath(preferredPath);
+  const normalizedSourcePath = normalizePath(sourcePath);
+  const sourceBasename = path.basename(normalizedSourcePath).toLowerCase();
+  const hintList = Array.isArray(nameHints) ? nameHints.filter(Boolean) : [];
+
+  const scored = candidatePaths.map((candidatePath) => {
+    const normalizedCandidate = normalizePath(candidatePath);
+    const candidateBasename = path.basename(normalizedCandidate).toLowerCase();
+    const candidateStem = path.basename(normalizedCandidate, path.extname(normalizedCandidate));
+
+    let score = 0;
+    if (normalizedPreferred && normalizedCandidate === normalizedPreferred) {
+      score += 5000;
+    }
+    if (normalizedCandidate === normalizedSourcePath) {
+      score += 2500;
+    }
+    if (candidateBasename === sourceBasename) {
+      score += 1100;
+    }
+
+    let bestHintScore = 0;
+    for (const hint of hintList) {
+      bestHintScore = Math.max(bestHintScore, scoreNameSimilarity(hint, candidateStem));
+    }
+    score += bestHintScore;
+
+    const compactSourceStem = normalizeNameForMatch(path.basename(normalizedSourcePath, path.extname(normalizedSourcePath)));
+    const compactCandidateStem = normalizeNameForMatch(candidateStem);
+    if (compactSourceStem && compactCandidateStem && compactCandidateStem === compactSourceStem) {
+      score += 1400;
+    }
+
+    score -= normalizedCandidate.length * 0.01;
+    return { path: normalizedCandidate, score };
+  });
+
+  scored.sort((a, b) => {
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+    if (a.path.length !== b.path.length) {
+      return a.path.length - b.path.length;
+    }
+    return a.path.localeCompare(b.path);
+  });
+
+  return scored.map((item) => item.path);
+}
+
 async function compareEtherscanFile(etherscanFile, index, contentCache) {
   const normalizedPath = normalizePath(etherscanFile.path);
   const expected = normalizeContent(etherscanFile.content || '');
+  const preferredRepoPath = normalizePath(etherscanFile.preferredRepoPath || '');
 
   const candidates = [];
   const pushCandidate = (candidatePath) => {
@@ -474,6 +603,36 @@ async function compareEtherscanFile(etherscanFile, index, contentCache) {
       candidates.push(candidatePath);
     }
   };
+
+  if (preferredRepoPath) {
+    if (!index.pathToEntry.has(preferredRepoPath)) {
+      return {
+        path: etherscanFile.path,
+        status: 'mismatch',
+        matchedPath: preferredRepoPath,
+        reason: 'Manual repo path was provided but does not exist in this repository snapshot.',
+        diff: ''
+      };
+    }
+
+    const preferredContent = await getRepoContentByPath(preferredRepoPath, index, contentCache);
+    if (preferredContent === expected) {
+      return {
+        path: etherscanFile.path,
+        status: 'match',
+        matchedPath: preferredRepoPath,
+        reason: 'Exact content match using manual repo path override.'
+      };
+    }
+
+    return {
+      path: etherscanFile.path,
+      status: 'mismatch',
+      matchedPath: preferredRepoPath,
+      reason: 'Manual repo path override differs in content.',
+      diff: buildUnifiedDiff(normalizedPath, expected, preferredContent || '')
+    };
+  }
 
   pushCandidate(normalizedPath);
 
@@ -485,23 +644,39 @@ async function compareEtherscanFile(etherscanFile, index, contentCache) {
 
   const nameHints = extractContractNameHints(normalizedPath, expected);
   for (const hint of nameHints) {
-    const stemCandidates = index.stemToPaths.get(hint) || [];
-    for (const candidate of stemCandidates) {
-      pushCandidate(candidate);
+    const normalizedHint = String(hint || '').toLowerCase();
+    const compactHint = normalizeNameForMatch(hint);
+    for (const hintKey of [normalizedHint, compactHint]) {
+      if (!hintKey) {
+        continue;
+      }
+      const stemCandidates = index.stemToPaths.get(hintKey) || [];
+      for (const candidate of stemCandidates) {
+        pushCandidate(candidate);
+      }
     }
   }
 
   if (nameHints.length > 0) {
     const declaredNameIndex = await getDeclaredNameIndex(index, contentCache);
     for (const hint of nameHints) {
-      const namedCandidates = declaredNameIndex.get(hint) || [];
-      for (const candidate of namedCandidates) {
-        pushCandidate(candidate);
+      const normalizedHint = String(hint || '').toLowerCase();
+      const compactHint = normalizeNameForMatch(hint);
+      for (const hintKey of [normalizedHint, compactHint]) {
+        if (!hintKey) {
+          continue;
+        }
+        const namedCandidates = declaredNameIndex.get(hintKey) || [];
+        for (const candidate of namedCandidates) {
+          pushCandidate(candidate);
+        }
       }
     }
   }
 
-  for (const candidatePath of candidates) {
+  const rankedCandidates = rankCandidatePaths(candidates, preferredRepoPath, normalizedPath, nameHints);
+
+  for (const candidatePath of rankedCandidates) {
     const repoContent = await getRepoContentByPath(candidatePath, index, contentCache);
     if (repoContent === expected) {
       return {
@@ -516,7 +691,7 @@ async function compareEtherscanFile(etherscanFile, index, contentCache) {
     }
   }
 
-  if (candidates.length === 0) {
+  if (rankedCandidates.length === 0) {
     return {
       path: etherscanFile.path,
       status: 'mismatch',
@@ -525,7 +700,7 @@ async function compareEtherscanFile(etherscanFile, index, contentCache) {
     };
   }
 
-  const fallbackPath = candidates[0];
+  const fallbackPath = rankedCandidates[0];
   const fallbackContent = await getRepoContentByPath(fallbackPath, index, contentCache);
   const fallbackBasename = path.basename(fallbackPath).toLowerCase();
 
@@ -610,7 +785,8 @@ app.post('/api/verify', async (req, res) => {
       .filter((item) => item && typeof item.path === 'string')
       .map((item) => ({
         path: normalizePath(item.path),
-        content: normalizeContent(item.content || '')
+        content: normalizeContent(item.content || ''),
+        preferredRepoPath: normalizePath(item.preferredRepoPath || '')
       }))
       .filter((item) => item.path);
 
@@ -623,6 +799,7 @@ app.post('/api/verify', async (req, res) => {
     const commitSha = await resolveCommitSha(parsedRepo.owner, parsedRepo.repo, commitHash);
     const zip = await downloadRepoZip(parsedRepo.owner, parsedRepo.repo, commitSha);
     const index = indexZipEntries(zip);
+    const repoFiles = Array.from(index.pathToEntry.keys()).sort((a, b) => a.localeCompare(b));
 
     const contentCache = new Map();
     const fileResults = await Promise.all(
@@ -636,7 +813,8 @@ app.post('/api/verify', async (req, res) => {
       commitSha,
       totalCompared: fileResults.length,
       mismatchCount: mismatches.length,
-      fileResults
+      fileResults,
+      repoFiles
     });
   } catch (error) {
     return res.status(500).json({

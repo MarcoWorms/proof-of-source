@@ -42,5 +42,6 @@ Open [http://localhost:3000](http://localhost:3000).
 ## Notes
 
 - Comparison normalizes line endings (`CRLF` and `LF`) before equality checks.
-- Matching prefers exact path, then basename, then contract-name fallback (declaration search).
+- Matching prefers exact path, then basename, then closest contract-name fallback.
+- If auto-detection picks the wrong file, you can manually choose any repo path per contract in the UI.
 - Etherscan calls include `chainid` (default `1`, Ethereum mainnet).

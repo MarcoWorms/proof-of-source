@@ -1,8 +1,10 @@
 const STORAGE_KEY = 'proofOfSource.state.v2';
+const REPO_FILE_DATALIST_ID = 'repo-file-options';
 
 const state = {
   contractName: '',
   files: [],
+  repoFiles: [],
   verifyResults: [],
   loadStatus: { type: 'info', message: '' },
   verifyStatus: { type: 'info', message: '' },
@@ -175,14 +177,26 @@ function normalizeStoredFiles(candidate) {
     .map((file) => {
       const isKnownLib = Boolean(file.isKnownLib);
       const selected = typeof file.selected === 'boolean' ? file.selected : !isLibDirectoryPath(file.path);
+      const preferredRepoPath =
+        typeof file.preferredRepoPath === 'string' ? normalizeClientPath(file.preferredRepoPath) : '';
 
       return {
         path: file.path,
         content: file.content,
         isKnownLib,
-        selected
+        selected,
+        preferredRepoPath
       };
     });
+}
+
+function normalizeClientPath(filePath) {
+  return String(filePath || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .replace(/^\.(\/|\\)/, '')
+    .replace(/^\/+/, '')
+    .trim();
 }
 
 function isLibDirectoryPath(filePath) {
@@ -268,10 +282,19 @@ function renderFileList() {
 function gatherSelectedFiles() {
   return state.files
     .filter((file) => file.selected)
-    .map((file) => ({
-      path: file.path,
-      content: file.content
-    }));
+    .map((file) => {
+      const payload = {
+        path: file.path,
+        content: file.content
+      };
+
+      const preferredRepoPath = normalizeClientPath(file.preferredRepoPath || '');
+      if (preferredRepoPath) {
+        payload.preferredRepoPath = preferredRepoPath;
+      }
+
+      return payload;
+    });
 }
 
 function clearVerifyOutput() {
@@ -380,6 +403,144 @@ function renderUnifiedDiff(diffText) {
   return wrapper;
 }
 
+function renderRepoFileDatalist() {
+  let datalist = document.getElementById(REPO_FILE_DATALIST_ID);
+  if (!datalist) {
+    datalist = document.createElement('datalist');
+    datalist.id = REPO_FILE_DATALIST_ID;
+    document.body.appendChild(datalist);
+  }
+
+  datalist.innerHTML = '';
+  for (const repoPath of state.repoFiles) {
+    const option = document.createElement('option');
+    option.value = repoPath;
+    datalist.appendChild(option);
+  }
+}
+
+function getSourceFileStateByPath(sourcePath) {
+  const normalizedSourcePath = normalizeClientPath(sourcePath);
+  return state.files.find((file) => normalizeClientPath(file.path) === normalizedSourcePath) || null;
+}
+
+function setPreferredRepoPathForSource(sourcePath, preferredRepoPath) {
+  const file = getSourceFileStateByPath(sourcePath);
+  if (!file) {
+    return false;
+  }
+
+  file.preferredRepoPath = normalizeClientPath(preferredRepoPath || '');
+  persistState();
+  return true;
+}
+
+function createManualPathEditor(result) {
+  const fileState = getSourceFileStateByPath(result.path);
+  const manualPreferred = normalizeClientPath(fileState?.preferredRepoPath || '');
+  const activePath = manualPreferred || normalizeClientPath(result.matchedPath || '');
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'manual-path-wrap';
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'matched-path-link';
+  toggle.textContent = activePath
+    ? `Selected repo file: ${activePath}`
+    : 'No repo file selected. Click to choose manually.';
+  wrapper.appendChild(toggle);
+
+  const panel = document.createElement('div');
+  panel.className = 'manual-path-panel';
+  panel.hidden = true;
+
+  const helper = document.createElement('p');
+  helper.className = 'manual-path-help';
+  helper.textContent = 'Pick any repository file path and re-run proof for this contract.';
+  panel.appendChild(helper);
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'repo-path-input';
+  input.setAttribute('list', REPO_FILE_DATALIST_ID);
+  input.placeholder = 'Type or select a repo file path';
+  input.value = activePath;
+  panel.appendChild(input);
+
+  const actions = document.createElement('div');
+  actions.className = 'manual-path-actions';
+
+  const applyButton = document.createElement('button');
+  applyButton.type = 'button';
+  applyButton.className = 'btn ghost manual-btn';
+  applyButton.textContent = 'Use This Path';
+
+  const clearButton = document.createElement('button');
+  clearButton.type = 'button';
+  clearButton.className = 'btn ghost manual-btn';
+  clearButton.textContent = 'Use Auto Match';
+
+  actions.appendChild(applyButton);
+  actions.appendChild(clearButton);
+  panel.appendChild(actions);
+  wrapper.appendChild(panel);
+
+  const togglePanel = () => {
+    panel.hidden = !panel.hidden;
+  };
+
+  const resolveCanonicalRepoPath = (pathValue) => {
+    const normalized = normalizeClientPath(pathValue);
+    if (!normalized) {
+      return '';
+    }
+
+    return state.repoFiles.find((repoPath) => normalizeClientPath(repoPath) === normalized) || '';
+  };
+
+  toggle.addEventListener('click', togglePanel);
+
+  applyButton.addEventListener('click', async () => {
+    if (elements.verifyBtn.disabled) {
+      return;
+    }
+
+    const canonicalPath = resolveCanonicalRepoPath(input.value);
+    if (!canonicalPath) {
+      setVerifyStatus('error', 'Selected repo path was not found in this repository snapshot.');
+      return;
+    }
+
+    const updated = setPreferredRepoPathForSource(result.path, canonicalPath);
+    if (!updated) {
+      setVerifyStatus('error', 'Could not update manual path override for this file.');
+      return;
+    }
+
+    setVerifyStatus('info', 'Manual path applied. Re-running proof...');
+    await verifySelection();
+  });
+
+  clearButton.addEventListener('click', async () => {
+    if (elements.verifyBtn.disabled) {
+      return;
+    }
+
+    const updated = setPreferredRepoPathForSource(result.path, '');
+    if (!updated) {
+      setVerifyStatus('error', 'Could not clear manual path override for this file.');
+      return;
+    }
+
+    setVerifyStatus('info', 'Manual path cleared. Re-running proof...');
+    await verifySelection();
+  });
+
+  refreshButtonFX();
+  return wrapper;
+}
+
 function renderVerifyResults(fileResults) {
   elements.verifyResults.innerHTML = '';
 
@@ -413,7 +574,9 @@ function renderVerifyResults(fileResults) {
       card.appendChild(reason);
     }
 
-    if (result.matchedPath) {
+    if (state.repoFiles.length > 0) {
+      card.appendChild(createManualPathEditor(result));
+    } else if (result.matchedPath) {
       const matchedPath = document.createElement('p');
       matchedPath.className = 'matched-path';
       matchedPath.textContent = `Matched path: ${result.matchedPath}`;
@@ -482,6 +645,7 @@ function restoreState() {
 
   state.contractName = typeof stored.contractName === 'string' ? stored.contractName : '';
   state.files = normalizeStoredFiles(stored.files);
+  state.repoFiles = [];
   state.verifyResults = Array.isArray(stored.verifyResults) ? stored.verifyResults : [];
   state.loadStatus = normalizeStoredStatus(stored.loadStatus);
   state.verifyStatus = normalizeStoredStatus(stored.verifyStatus);
@@ -552,9 +716,12 @@ async function loadFiles() {
     state.files = Array.isArray(body.files)
       ? body.files.map((file) => ({
           ...file,
-          selected: !isLibDirectoryPath(file.path)
+          selected: !isLibDirectoryPath(file.path),
+          preferredRepoPath: ''
         }))
       : [];
+    state.repoFiles = [];
+    renderRepoFileDatalist();
     state.verifyResults = [];
 
     renderFileList();
@@ -570,6 +737,8 @@ async function loadFiles() {
     persistState();
   } catch (error) {
     state.files = [];
+    state.repoFiles = [];
+    renderRepoFileDatalist();
     state.contractName = '';
     state.verifyResults = [];
     elements.filesPanel.hidden = true;
@@ -693,6 +862,8 @@ async function verifySelection() {
       );
     }
 
+    state.repoFiles = Array.isArray(body.repoFiles) ? body.repoFiles : [];
+    renderRepoFileDatalist();
     state.verifyResults = Array.isArray(body.fileResults) ? body.fileResults : [];
     renderVerifyResults(state.verifyResults);
     runImpact(elements.verifyPanel);
@@ -730,6 +901,7 @@ function bindEvents() {
 
 function initialize() {
   restoreState();
+  renderRepoFileDatalist();
   bindEvents();
   void fetchRuntimeConfig();
 }

@@ -512,6 +512,61 @@ input:focus {
   font-size: 0.9rem;
 }
 
+.manual-path-wrap {
+  margin-top: 0.45rem;
+  padding: 0.5rem 0.55rem;
+  border: 1px solid rgba(6, 117, 249, 0.2);
+  background: rgba(6, 117, 249, 0.04);
+}
+
+.matched-path-link {
+  border: 0;
+  background: transparent;
+  color: var(--yearn-blue-night);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.matched-path-link:hover {
+  color: var(--yearn-blue);
+  text-decoration: underline;
+}
+
+.manual-path-panel {
+  margin-top: 0.48rem;
+  padding-top: 0.48rem;
+  border-top: 1px dashed rgba(6, 117, 249, 0.25);
+}
+
+.manual-path-help {
+  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
+  color: #2a3040;
+}
+
+.repo-path-input {
+  width: 100%;
+  font-family: 'Noto Sans Mono', 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.manual-path-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-top: 0.48rem;
+}
+
+.manual-btn {
+  margin-top: 0;
+  padding: 0.36rem 0.68rem;
+  font-size: 0.78rem;
+}
+
 .diff-details {
   margin-top: 0.62rem;
   border: 1px solid var(--line-soft);
