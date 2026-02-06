@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Proof Of Source favicon">
+  <rect width="64" height="64" fill="#0675F9" />
+  <rect x="1" y="1" width="62" height="62" fill="none" stroke="#000000" stroke-width="2" />
+
+  <path d="M18 12H40L50 22V52H18Z" fill="#FFFFFF" />
+  <path d="M40 12V22H50" fill="none" stroke="#0675F9" stroke-width="4" stroke-linecap="square" />
+
+  <path d="M22 38L30 46L46 30" fill="none" stroke="#000000" stroke-width="6" stroke-linecap="square" stroke-linejoin="miter" />
+</svg>
